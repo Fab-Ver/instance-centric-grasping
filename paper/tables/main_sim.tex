@@ -1,0 +1,29 @@
+\begin{table*}[t!]
+    \setlength{\tabcolsep}{6pt}
+    \centering
+    \begin{tabular}{lrr|cc||cc|cc}
+    \toprule
+         &  \multicolumn{4}{c||}{Grasping} & \multicolumn{4}{c}{Reconstruction} \\
+         &  \multicolumn{2}{c}{Packed}& \multicolumn{2}{c||}{Pile}&\multicolumn{2}{c}{Packed}& \multicolumn{2}{c}{Pile} 
+        \\ Method &  GSR (\%) $\uparrow$ & DR (\%) $\uparrow$  &GSR (\%) $\uparrow$ & DR (\%) $\uparrow$ & C-L1 [mm] $\downarrow$ & IoU (\%) $\uparrow$ & C-L1 [mm] $\downarrow$ & IoU (\%) $\uparrow$ \\ \midrule
+        % SHAF~\cite{fischinger2013learning} &  -- &  --   &   -- & -- & -- & --& -- & --\\
+        PointNetGPD ~\cite{liang2019pointnetgpd}&  79.3 $\pm$ 1.8 & 82.5  $\pm$  2.9 &  75.6  $\pm$  2.3 & 77.0 $\pm$  2.8 & -- & --  & -- & --\\
+        VGN~\cite{Breyer2021VolumetricGN} &   80.2  $\pm$  1.6 & 86.2  $\pm$  2.0  & 64.9  $\pm$  2.2 & 69.1  $\pm$  3.2  &-- & -- & -- & -- \\
+        GIGA$^\dagger$~\cite{Jiang2021SynergiesBA} & 89.9 $\pm$ 1.7 & 87.6 $\pm$ 2.0  &76.3 $\pm$ 2.4 & 80.9 $\pm$ 4.1  &  2.5 $\pm$ 1.2  & {82} $\pm$ 6.9 &  3.4 $\pm$ 1.4 &  71 $\pm$ 8.6   \\  
+        GIGA-HR$^\dagger$~\cite{Jiang2021SynergiesBA} & \underline{91.4} $\pm$ 1.5 & 88.5 $\pm$ 1.4  & 86.5 $\pm$ 1.2& 80.8 $\pm$ 1.9 &  2.5 $\pm$ 1.2  & {82} $\pm$ 6.9 &  3.4 $\pm$ 1.4 &  71 $\pm$  8.6    \\  
+EdgeGraspNet$^*$\cite{huang2022edge} & 90.6 $\pm$ 0.9 & \underline{93.9} $\pm$ 0.7 & 91.0 $\pm$ 2.0 & \underline{93.7} $\pm$ \underline{2.3}& -- & --  & -- & -- \\ 
+
+ VN-EdgeGraspNet$^*$\cite{huang2022edge} & 90.4 $\pm$ 2.5 & 92.8 $\pm$ 1.0  & \underline{91.9} $\pm$ \underline{0.8} & 92.7 $\pm$ {1.2} & -- & --  & -- & -- \\
+  
+ 
+ \OurMethod{} (Ours) & \textbf{97.7}	$\pm$ \textbf{0.9} & \textbf{97.5} $\pm$ \textbf{0.3} & \textbf{92.0} $\pm$ \textbf{2.6}
+ & \textbf{94.1} $\pm$ \textbf{1.4}&  \textbf{2.3} $\pm$ \textbf{1.1} & \textbf{84} $\pm$ \textbf{6.1}&  \textbf{2.9} $\pm$ \textbf{1.9} & \textbf{77} $\pm$ \textbf{9.9}  \\  
+ 
+ 
+\bottomrule
+\end{tabular}
+\caption{\textbf{Comparison to State-of-the-Art on Synthetic data.}
+    Simulated results on the packed and piled scenes using the evaluation setup from \cite{huang2022edge}. We report grasp success rate (GSR), declutter rate (DR), and reconstruction performance, Chamfer L1 distance (C-L1), IoU. \OurMethod{} denotes our approach that predicts grasp poses and occupancy for each individual instance. We retrain ($^\dagger$) GIGA on randomized viewpoints and 2M grasps for each environment separately and re-evaluate ($^*$) the pre-trained checkpoints provided by \cite{huang2022edge} multiple times. The scores for VGN and PointnetGPD are taken from \cite{huang2022edge}. Highest number marked in bold, second highest underlined. }
+    \label{tab:giga_sim_res}
+\vspace{-15px}
+\end{table*}

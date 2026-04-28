@@ -1,0 +1,26 @@
+\begin{table}[]
+
+\centering
+\resizebox{\columnwidth}{!}{
+
+\begin{tabular}{l|cc|cc}
+\toprule
+Method &  \multicolumn{2}{c|}{Packed}& \multicolumn{2}{c}{Pile}
+    \\  &  GSR $\uparrow$ & DR$\uparrow$ & GSR (\%) $\uparrow$ & DR (\%) $\uparrow$ \\ \midrule
+    GIGA-HR$^{[1]}$ &   73\% & 59\%  & \underline{83}\%  & \underline{71}\% \\
+    % Edge & \textbf{94}\% (17/18) & \underline{71}\% & 4/6 & 72\% (16/22)& 60\% & 4/6 \\
+    VN-EdgeGraspNet$^{[2]}$ & \underline{84}\% & \underline{76}\%  & 81\% & \underline{71}\% \\
+    \OurMethod{}  (Ours) &   \textbf{90}\% & \textbf{88}\%  & \textbf{90}\% & \textbf{83}\%\\
+    \bottomrule
+
+\end{tabular}
+
+
+}
+\caption{\textbf{Clutter Removal Experiment on Real-World Data.} We report the grasp success rate (GSR) as well as declutter rate (DR) evaluated in the real world setting.\vspace{-15px}} %\rene{Eval with final model. Add EdgeGrasp}}
+
+\label{tab:real-world-res}
+%\vspace{-15px}
+\end{table}
+
+

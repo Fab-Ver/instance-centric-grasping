@@ -1,0 +1,24 @@
+
+
+
+\begin{table*}[b]
+    \centering
+    \begin{tabular}{l|l|cc|rrrr|llll}
+    \toprule
+     & & \multicolumn{2}{c|}{Resolution} & \multicolumn{4}{c|}{Grasping} & \multicolumn{4}{c}{Reconstruction} \\
+    
+     Instances & Query Position & Sparse & Dense &  \multicolumn{2}{c}{Packed}& \multicolumn{2}{c|}{Pile}&\multicolumn{2}{c}{Packed}& \multicolumn{2}{c}{Pile} 
+        \\  &  &  & &  GSR  & DR &  GSR & DR &  L1 & IoU &  L1 & IoU  \\ \midrule
+        
+        \cmark  & Cluster3D & 3\,mm & 1\,cm  & \textbf{96.9} & {96.7} & 83.9 & {75.0} & {2.4}& \textbf{85} &  2.4 & 78  \\  
+        \cmark  & Cluster2D & 3\,mm & 1\,cm  & {95.7} & {96.3} & -- & -- & \textbf{2.3}& {84} &  2.4 & 78  \\  
+        \cmark   & Cluster3D & 3\,mm & 2\,cm & 95.3 & 97.1 &  & & 3.05 & 80 & \\  
+        \cmark   & Cluster3D & 3\,mm & $\infty$ & 96.1  & \textbf{97.3} &  & & 3.06 & 80 &  &  \\  
+        \cmark   & Cluster3D & 5\,mm & 1\,cm& 95.3  & 97.0 &  & & 2.9 & 81 &  &  \\  
+          
+        \bottomrule
+    \end{tabular}
+    \caption{\todo{move to text?} Ablation Studies for our network. 
+    \label{tab:ablation}}
+\vspace{-15px}
+\end{table*}

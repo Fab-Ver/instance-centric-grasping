@@ -1,0 +1,252 @@
+\begin{thebibliography}{10}
+\providecommand{\url}[1]{#1}
+\csname url@rmstyle\endcsname
+\providecommand{\newblock}{\relax}
+\providecommand{\bibinfo}[2]{#2}
+\providecommand\BIBentrySTDinterwordspacing{\spaceskip=0pt\relax}
+\providecommand\BIBentryALTinterwordstretchfactor{4}
+\providecommand\BIBentryALTinterwordspacing{\spaceskip=\fontdimen2\font plus
+\BIBentryALTinterwordstretchfactor\fontdimen3\font minus
+  \fontdimen4\font\relax}
+\providecommand\BIBforeignlanguage[2]{{%
+\expandafter\ifx\csname l@#1\endcsname\relax
+\typeout{** WARNING: IEEEtran.bst: No hyphenation pattern has been}%
+\typeout{** loaded for the language `#1'. Using the pattern for}%
+\typeout{** the default language instead.}%
+\else
+\language=\csname l@#1\endcsname
+\fi
+#2}}
+
+\bibitem{embodied:intell:2015}
+A.~Cangelosi, J.~Bongard, M.~H. Fischer, and S.~Nolfi, ``Embodied
+  intelligence,'' \emph{Springer handbook of computational intelligence}, pp.
+  697--714, 2015.
+
+\bibitem{mahler2017dex}
+J.~Mahler, J.~Liang, S.~Niyaz, M.~Laskey, R.~Doan, X.~Liu, J.~A. Ojea, and
+  K.~Goldberg, ``Dex-net 2.0: Deep learning to plan robust grasps with
+  synthetic point clouds and analytic grasp metrics,'' \emph{arXiv preprint
+  arXiv:1703.09312}, 2017.
+
+\bibitem{Gualtieri2016HighPG}
+M.~Gualtieri, A.~ten Pas, K.~Saenko, and R.~W. Platt, ``High precision grasp
+  pose detection in dense clutter,'' \emph{2016 IEEE/RSJ International
+  Conference on Intelligent Robots and Systems (IROS)}, pp. 598--605, 2016.
+
+\bibitem{Breyer2021VolumetricGN}
+M.~Breyer, J.~J. Chung, L.~Ott, R.~Y. Siegwart, and J.~I. Nieto, ``Volumetric
+  grasping network: Real-time 6 dof grasp detection in clutter,'' in
+  \emph{Conference on Robot Learning (CoRL)}, 2021.
+
+\bibitem{Sundermeyer2021ContactGraspNetE6}
+M.~Sundermeyer, A.~Mousavian, R.~Triebel, and D.~Fox, ``Contact-graspnet:
+  Efficient 6-dof grasp generation in cluttered scenes,'' \emph{2021 IEEE
+  International Conference on Robotics and Automation (ICRA)}, pp.
+  13\,438--13\,444, 2021.
+
+\bibitem{huang2022edge}
+H.~Huang, D.~Wang, X.~Zhu, R.~Walters, and R.~Platt, ``Edge grasp network: A
+  graph-based se (3)-invariant approach to grasp detection,'' in \emph{2023
+  IEEE International Conference on Robotics and Automation (ICRA)}.\hskip 1em
+  plus 0.5em minus 0.4em\relax IEEE, 2023, pp. 3882--3888.
+
+\bibitem{van2020learning}
+M.~Van~der Merwe, Q.~Lu, B.~Sundaralingam, M.~Matak, and T.~Hermans, ``Learning
+  continuous 3d reconstructions for geometrically aware grasping,'' in
+  \emph{2020 IEEE International Conference on Robotics and Automation
+  (ICRA)}.\hskip 1em plus 0.5em minus 0.4em\relax IEEE, 2020, pp.
+  11\,516--11\,522.
+
+\bibitem{Jiang2021SynergiesBA}
+Z.~Jiang, Y.~Zhu, M.~Svetlik, K.~Fang, and Y.~Zhu, ``Synergies between
+  affordance and geometry: 6-dof grasp detection via implicit
+  representations,'' \emph{Robotics: science and systems (RSS)}, 2021.
+
+\bibitem{Mousavian_2019_ICCV}
+A.~Mousavian, C.~Eppner, and D.~Fox, ``6-dof graspnet: Variational grasp
+  generation for object manipulation,'' in \emph{Proceedings of the IEEE/CVF
+  International Conference on Computer Vision (ICCV)}, October 2019.
+
+\bibitem{ChavanDafle2021SimultaneousOR}
+N.~Chavan-Dafle, S.~Popovych, S.~Agrawal, D.~D. Lee, and V.~Isler,
+  ``Simultaneous object reconstruction and grasp prediction using a
+  camera-centric object shell representation,'' \emph{2022 IEEE/RSJ
+  International Conference on Intelligent Robots and Systems (IROS)}, pp.
+  1396--1403, 2021.
+
+\bibitem{li2021simultaneous}
+Y.~Li, T.~Kong, R.~Chu, Y.~Li, P.~Wang, and L.~Li, ``Simultaneous semantic and
+  collision learning for 6-dof grasp pose estimation,'' in \emph{2021 IEEE/RSJ
+  International Conference on Intelligent Robots and Systems (IROS)}.\hskip 1em
+  plus 0.5em minus 0.4em\relax IEEE, 2021, pp. 3571--3578.
+
+\bibitem{murali20206}
+A.~Murali, A.~Mousavian, C.~Eppner, C.~Paxton, and D.~Fox, ``6-dof grasping for
+  target-driven object manipulation in clutter,'' in \emph{2020 IEEE
+  International Conference on Robotics and Automation (ICRA)}.\hskip 1em plus
+  0.5em minus 0.4em\relax IEEE, 2020, pp. 6232--6238.
+
+\bibitem{yang2020deep}
+Y.~Yang, H.~Liang, and C.~Choi, ``A deep learning approach to grasping the
+  invisible,'' \emph{IEEE Robotics and Automation Letters}, vol.~5, no.~2, pp.
+  2232--2239, 2020.
+
+\bibitem{danielczuk2019mechanical}
+M.~Danielczuk, A.~Kurenkov, A.~Balakrishna, M.~Matl, D.~Wang,
+  R.~Mart{\'\i}n-Mart{\'\i}n, A.~Garg, S.~Savarese, and K.~Goldberg,
+  ``Mechanical search: Multi-step retrieval of a target object occluded by
+  clutter,'' in \emph{2019 International Conference on Robotics and Automation
+  (ICRA)}.\hskip 1em plus 0.5em minus 0.4em\relax IEEE, 2019, pp. 1614--1621.
+
+\bibitem{lou2021collision}
+X.~Lou, Y.~Yang, and C.~Choi, ``Collision-aware target-driven object grasping
+  in constrained environments,'' in \emph{2021 IEEE International Conference on
+  Robotics and Automation (ICRA)}.\hskip 1em plus 0.5em minus 0.4em\relax IEEE,
+  2021, pp. 6364--6370.
+
+\bibitem{Newbury2022DeepLA}
+R.~Newbury, M.~Gu, L.~Chumbley, A.~Mousavian, C.~Eppner, J.~Leitner, J.~Bohg,
+  A.~Morales, T.~Asfour, D.~Kragic, \emph{et~al.}, ``Deep learning approaches
+  to grasp synthesis: A review,'' \emph{IEEE Transactions on Robotics (T-RO)},
+  2023.
+
+\bibitem{9926708}
+P.~Raj, A.~Kumar, V.~Sanap, T.~Sandhan, and L.~Behera, ``Towards object
+  agnostic and robust 4-dof table-top grasping,'' in \emph{2022 IEEE 18th
+  International Conference on Automation Science and Engineering (CASE)}, 2022,
+  pp. 963--970.
+
+\bibitem{weng2023neural}
+T.~Weng, D.~Held, F.~Meier, and M.~Mukadam, ``Neural grasp distance fields for
+  robot manipulation,'' in \emph{2023 IEEE International Conference on Robotics
+  and Automation (ICRA)}.\hskip 1em plus 0.5em minus 0.4em\relax IEEE, 2023,
+  pp. 1814--1821.
+
+\bibitem{urain2023se}
+J.~Urain, N.~Funk, J.~Peters, and G.~Chalvatzaki, ``Se (3)-diffusionfields:
+  Learning smooth cost functions for joint grasp and motion optimization
+  through diffusion,'' in \emph{2023 IEEE International Conference on Robotics
+  and Automation (ICRA)}.\hskip 1em plus 0.5em minus 0.4em\relax IEEE, 2023,
+  pp. 5923--5930.
+
+\bibitem{liang2019pointnetgpd}
+H.~Liang, X.~Ma, S.~Li, M.~G{\"o}rner, S.~Tang, B.~Fang, F.~Sun, and J.~Zhang,
+  ``Pointnetgpd: Detecting grasp configurations from point sets,'' in
+  \emph{2019 International Conference on Robotics and Automation (ICRA)}.\hskip
+  1em plus 0.5em minus 0.4em\relax IEEE, 2019, pp. 3629--3635.
+
+\bibitem{varley2017shape}
+J.~Varley, C.~DeChant, A.~Richardson, J.~Ruales, and P.~Allen, ``Shape
+  completion enabled robotic grasping,'' in \emph{2017 IEEE/RSJ international
+  conference on intelligent robots and systems (IROS)}.\hskip 1em plus 0.5em
+  minus 0.4em\relax IEEE, 2017, pp. 2442--2447.
+
+\bibitem{miller2004graspit}
+A.~T. Miller and P.~K. Allen, ``Graspit! a versatile simulator for robotic
+  grasping,'' \emph{IEEE Robotics \& Automation Magazine}, vol.~11, no.~4, pp.
+  110--122, 2004.
+
+\bibitem{peng2020convolutional}
+S.~Peng, M.~Niemeyer, L.~Mescheder, M.~Pollefeys, and A.~Geiger,
+  ``Convolutional occupancy networks,'' in \emph{European Conference on
+  Computer Vision (ECCV)}, 2020.
+
+\bibitem{jeng2021gdn}
+K.-Y. Jeng, Y.-C. Liu, Z.~Y. Liu, J.-W. Wang, Y.-L. Chang, H.-T. Su, and
+  W.~Hsu, ``Gdn: A coarse-to-fine (c2f) representation for end-to-end 6-dof
+  grasp detection,'' in \emph{Conference on Robot Learning}.\hskip 1em plus
+  0.5em minus 0.4em\relax PMLR, 2021, pp. 220--231.
+
+\bibitem{breyer2022closed}
+M.~Breyer, L.~Ott, R.~Siegwart, and J.~J. Chung, ``Closed-loop next-best-view
+  planning for target-driven grasping,'' in \emph{2022 IEEE/RSJ International
+  Conference on Intelligent Robots and Systems (IROS)}.\hskip 1em plus 0.5em
+  minus 0.4em\relax IEEE, 2022, pp. 1411--1416.
+
+\bibitem{choy20194d}
+C.~Choy, J.~Gwak, and S.~Savarese, ``4d spatio-temporal convnets: Minkowski
+  convolutional neural networks,'' in \emph{Proceedings of the IEEE Conference
+  on Computer Vision and Pattern Recognition (CVPR)}, 2019, pp. 3075--3084.
+
+\bibitem{cciccek20163d}
+{\"O}.~{\c{C}}i{\c{c}}ek, A.~Abdulkadir, S.~S. Lienkamp, T.~Brox, and
+  O.~Ronneberger, ``3d u-net: learning dense volumetric segmentation from
+  sparse annotation,'' in \emph{Medical Image Computing and Computer-Assisted
+  Intervention--MICCAI 2016: 19th International Conference, Athens, Greece,
+  October 17-21, 2016, Proceedings, Part II 19}.\hskip 1em plus 0.5em minus
+  0.4em\relax Springer, 2016, pp. 424--432.
+
+\bibitem{schult2022mask3d}
+J.~Schult, F.~Engelmann, A.~Hermans, O.~Litany, S.~Tang, and B.~Leibe,
+  ``Mask3d: Mask transformer for 3d semantic instance segmentation,'' in
+  \emph{International Conference on Robotics and Automation (ICRA)}, 2023.
+
+\bibitem{Mescheder2018OccupancyNL}
+L.~M. Mescheder, M.~Oechsle, M.~Niemeyer, S.~Nowozin, and A.~Geiger,
+  ``Occupancy networks: Learning 3d reconstruction in function space,''
+  \emph{2019 IEEE/CVF Conference on Computer Vision and Pattern Recognition
+  (CVPR)}, pp. 4455--4465, 2018.
+
+\bibitem{qi2017pointnet}
+C.~R. Qi, H.~Su, K.~Mo, and L.~J. Guibas, ``Pointnet: Deep learning on point
+  sets for 3d classification and segmentation,'' in \emph{Proceedings of the
+  IEEE conference on computer vision and pattern recognition (CVPR)}, 2017, pp.
+  652--660.
+
+\bibitem{tancik2020fourier}
+M.~Tancik, P.~Srinivasan, B.~Mildenhall, S.~Fridovich-Keil, N.~Raghavan,
+  U.~Singhal, R.~Ramamoorthi, J.~Barron, and R.~Ng, ``Fourier features let
+  networks learn high frequency functions in low dimensional domains,''
+  \emph{Advances in Neural Information Processing Systems}, vol.~33, pp.
+  7537--7547, 2020.
+
+\bibitem{loshchilov2017decoupled}
+I.~Loshchilov and F.~Hutter, ``Decoupled weight decay regularization,''
+  \emph{arXiv preprint arXiv:1711.05101}, 2017.
+
+\bibitem{loshchilov2016sgdr}
+I.~Loshchilov and F.~{Hutter}, ``Sgdr: Stochastic gradient descent with warm
+  restarts,'' \emph{arXiv preprint arXiv:1608.03983}, 2016.
+
+\bibitem{calli2017yale}
+B.~Calli, A.~Singh, J.~Bruce, A.~Walsman, K.~Konolige, S.~Srinivasa, P.~Abbeel,
+  and A.~M. Dollar, ``Yale-cmu-berkeley dataset for robotic manipulation
+  research,'' \emph{The International Journal of Robotics Research (T-RO)},
+  vol.~36, no.~3, pp. 261--268, 2017.
+
+\bibitem{kit_ds}
+A.~Kasper, Z.~Xue, and R.~Dillmann, ``The kit object models database: An object
+  model database for object recognition, localization and manipulation in
+  service robotics,'' \emph{The International Journal of Robotics Research
+  (T-RO)}, vol.~31, no.~8, pp. 927--934, 2012.
+
+\bibitem{Singh2014BigBIRDAL}
+A.~Singh, J.~Sha, K.~S. Narayan, T.~Achim, and P.~Abbeel, ``Bigbird: A
+  large-scale 3d database of object instances,'' \emph{2014 IEEE International
+  Conference on Robotics and Automation (ICRA)}, pp. 509--516, 2014.
+
+\bibitem{vantulder2021}
+\BIBentryALTinterwordspacing
+G.~van Tulder. (2021) {elasticdeform: Elastic deformations for N-dimensional
+  images}. Zenodo. [Online]. Available:
+  \url{https://doi.org/10.5281/zenodo.4569691}
+\BIBentrySTDinterwordspacing
+
+\bibitem{zhou2018open3d}
+Q.-Y. Zhou, J.~Park, and V.~Koltun, ``Open3d: A modern library for 3d data
+  processing,'' \emph{arXiv preprint arXiv:1801.09847}, 2018.
+
+\bibitem{downs2022google}
+L.~Downs, A.~Francis, N.~Koenig, B.~Kinman, R.~Hickman, K.~Reymann, T.~B.
+  McHugh, and V.~Vanhoucke, ``Google scanned objects: A high-quality dataset of
+  3d scanned household items,'' in \emph{2022 International Conference on
+  Robotics and Automation (ICRA)}.\hskip 1em plus 0.5em minus 0.4em\relax IEEE,
+  2022, pp. 2553--2560.
+
+\bibitem{coleman2014reducing}
+D.~Coleman, I.~Sucan, S.~Chitta, and N.~Correll, ``Reducing the barrier to
+  entry of complex robotic software: a moveit! case study,'' \emph{Journal of
+  Software Engineering for Robotics}, 2014.
+
+\end{thebibliography}
