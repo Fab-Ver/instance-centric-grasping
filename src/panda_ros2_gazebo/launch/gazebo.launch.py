@@ -20,17 +20,18 @@ def generate_launch_description():
     )
     default_urdf_path = os.path.join(default_model_path, "panda", "panda.urdf")
     default_rviz_config_path = os.path.join(pkg_share, 'rviz/rviz.rviz')
+    world = LaunchConfiguration('world', default='')
     gzclient = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-                os.path.join(get_package_share_directory("gazebo_ros"), "launch", "gzserver.launch.py")
-        ),
-        launch_arguments={"verbose": "true"}.items(), # "extra_gazebo_args": "-s libgazebo_ros_p3d.so"
-    )
-    gzserver = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
                 os.path.join(get_package_share_directory("gazebo_ros"), "launch", "gzclient.launch.py")
         ),
         launch_arguments={"verbose": "true"}.items(),
+    )
+    gzserver = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+                os.path.join(get_package_share_directory("gazebo_ros"), "launch", "gzserver.launch.py")
+        ),
+        launch_arguments={"verbose": "true", "world": world}.items(),
     )
     robot_state_publisher_node = launch_ros.actions.Node(
         package='robot_state_publisher',
@@ -81,22 +82,7 @@ def generate_launch_description():
     gazebo_model_path = SetEnvironmentVariable(name='GAZEBO_MODEL_PATH', value=[default_model_path])
     gazebo_media_path = SetEnvironmentVariable(name='GAZEBO_MEDIA_PATH', value=[default_model_path])
 
-    kinect_urdf_path = os.path.join(default_model_path, "kinect", "kinect.urdf")
-    spawn_kinect_launch_description = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(pkg_share, "kinect.launch.py")),
-        launch_arguments={
-            'robot_urdf': kinect_urdf_path,
-            'x': TextSubstitution(text=str(1.5)),
-            'y': TextSubstitution(text=str(0.0)),
-            'z': TextSubstitution(text=str(0.25)),
-            'roll' : TextSubstitution(text=str(0.0)),
-            'pitch' : TextSubstitution(text=str(-0.09817477042)), # -pi/32
-            'yaw' : TextSubstitution(text=str(3.14159265359)), # pi
-            'robot_name': default_camera_name,
-            'robot_namespace': default_camera_name
-            }.items()
-    )
+    # rimosso kinect di default
 
     launch_description = launch.LaunchDescription([
         gazebo_model_path,
@@ -113,6 +99,7 @@ def generate_launch_description():
                                              description='Absolute path to robot urdf file'),
         launch.actions.DeclareLaunchArgument(name='rvizconfig', default_value=default_rviz_config_path,
                                              description='Absolute path to rviz config file'),
+        launch.actions.DeclareLaunchArgument('world', default_value='', description='World file'),
         spawn_joint_state_broadcaster,
         robot_state_publisher_node,
         rviz_node,
@@ -120,10 +107,6 @@ def generate_launch_description():
         gzserver,
         spawn_entity,
         spawn_controller
-        # joint_state_publisher_node,
-        # joint_state_publisher_gui_node,
     ])
-
-    launch_description.add_action(spawn_kinect_launch_description)
 
     return launch_description
