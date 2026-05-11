@@ -340,3 +340,10 @@ lib/
 # === Catkin ignore (if ever mixing with ROS 1) ===
 # CATKIN_IGNORE
 
+
+# File di dati generati durante i test
+*.pcd
+*.pcap
+*.bag
+/scenes/
+/grasps/
