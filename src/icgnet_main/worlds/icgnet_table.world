@@ -3,6 +3,12 @@
   <world name="default">
     <include><uri>model://ground_plane</uri></include>
     <include><uri>model://sun</uri></include>
+    
+    <plugin name="gazebo_ros_factory" filename="libgazebo_ros_factory.so">
+      <ros>
+        <namespace>/</namespace>
+      </ros>
+    </plugin>
 
     <!-- TAVOLO: Un semplice cubo posizionato davanti al robot -->
     <model name="table">

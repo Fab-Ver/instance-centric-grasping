@@ -1,7 +1,7 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import IncludeLaunchDescription, SetEnvironmentVariable
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 
@@ -11,8 +11,19 @@ def generate_launch_description():
 
     # Percorso del tuo file .world
     world_path = os.path.join(pkg_icgnet_main, 'worlds', 'icgnet_table.world')
+    
+    # Percorso dei modelli locali
+    models_path = os.path.join(pkg_icgnet_main, 'models')
+    
+    # Aggiungiamo i modelli locali al path di Gazebo
+    # Nota: usiamo append per non cancellare i modelli standard di Gazebo
+    set_gazebo_model_path = SetEnvironmentVariable(
+        name='GAZEBO_MODEL_PATH',
+        value=[os.environ.get('GAZEBO_MODEL_PATH', ''), ':', models_path]
+    )
 
     return LaunchDescription([
+        set_gazebo_model_path,
         # Lanciamo il file del panda che ora accetta il parametro 'world'
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(

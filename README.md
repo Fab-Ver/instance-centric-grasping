@@ -65,9 +65,26 @@ source install/setup.bash
 > `echo "source ~/icgnet_ws/install/setup.bash" >> ~/.bashrc`
 
 ### 5. Verification (Smoke Test)
-To verify that everything is installed correctly, launch the Panda robot simulation in Gazebo:
+To verify that everything is installed correctly, launch the unified environment (Gazebo + RViz + TF + Robot):
 
 ```bash
-ros2 launch panda_ros2_gazebo gazebo.launch.py
+ros2 launch icgnet_main world.launch.py
 ```
-*You should see Gazebo opening with the Franka Panda robot spawned in the center, and RViz showing the robot correctly configured without TF errors.*
+*You should see Gazebo opening with the Franka Panda robot spawned in front of a table, and RViz showing the PointCloud perfectly aligned with the robot.*
+
+> **Note for RViz:** When you open RViz for the first time, add a `PointCloud2` display, set the topic to `/camera/rgbd_camera/points` (or `/camera/points`), and change the Fixed Frame to `camera_link`. Then go to `File -> Save Config` to make this automatic for future launches.
+
+### 6. Spawning Objects
+To test the grasping, you can spawn objects on the table while Gazebo is running. Open a new terminal and choose one of the following methods:
+
+**Method A: Spawn Local Model (Recommended, Instant)**
+Spawns a local model without relying on the internet.
+```bash
+ros2 run gazebo_ros spawn_entity.py -entity my_local_can -file ~/icgnet_ws/src/icgnet_main/models/coke_can/model.sdf -x 0.65 -y 0.0 -z 0.5
+```
+
+**Method B: Spawn from Gazebo Online Database (Slower)**
+Downloads the model from `models.gazebosim.org`. This might hang for a few minutes on the first run while it downloads.
+```bash
+ros2 run gazebo_ros spawn_entity.py -database coke_can -entity online_can -x 0.65 -y 0.2 -z 0.5
+```
