@@ -1,0 +1,365 @@
+callbacks:
+- _target_: pytorch_lightning.callbacks.ModelCheckpoint
+  auto_insert_metric_name: false
+  dirpath: saved/ICRA_24_both_fps_no_table_no_obj_more_scene
+  every_n_epochs: 2
+  filename: '{epoch}'
+  mode: max
+  monitor: train_loss_mask
+  save_last: true
+  save_top_k: -1
+- _target_: pytorch_lightning.callbacks.ModelCheckpoint
+  auto_insert_metric_name: false
+  dirpath: saved/ICRA_24_both_fps_no_table_no_obj_more_scene
+  every_n_epochs: 1
+  filename: '{epoch}--{val/scene_grasp/f1:.3f}'
+  mode: max
+  monitor: val/scene_grasp/f1
+  save_last: true
+  save_top_k: 1
+- _target_: pytorch_lightning.callbacks.LearningRateMonitor
+data:
+  add_all_coordinates: false
+  add_colors: false
+  add_instance: true
+  add_normals: false
+  add_raw_coordinates: true
+  add_z_coordinate: false
+  batch_size: 4
+  cache_data: false
+  crop_length: 6.0
+  crop_min_size: 20000
+  cropping: false
+  cropping_args:
+    aspect: 0.8
+    max_crop: 1.0
+    min_crop: 0.5
+    min_points: 30000
+  cropping_v1: true
+  ignore_label: 255
+  in_channels: 1
+  num_labels: 1
+  num_workers: 8
+  pin_memory: false
+  reps_per_epoch: 1
+  task: instance_segmentation
+  test_batch_size: 1
+  test_collation:
+    _target_: datasets.utils.VoxelizeCollateSDF
+    batch_instance: false
+    filter_out_classes: []
+    ignore_class_threshold: 100
+    ignore_label: null
+    label_offset: 0
+    mode: val
+    num_queries: 32
+    probing: false
+    task: instance_segmentation
+    voxel_size: 0.003
+  test_dataloader:
+    _target_: torch.utils.data.DataLoader
+    batch_size: 1
+    num_workers: 8
+    pin_memory: false
+    shuffle: false
+  test_dataset:
+    _target_: icg_net.data.giga_contact_dataset.GigaContactTestDataset
+    data_dir: []
+    data_percent: 1
+  test_mode: val
+  train_collation:
+    _target_: datasets.utils.VoxelizeCollateSDF
+    batch_instance: false
+    filter_out_classes: []
+    ignore_class_threshold: 100
+    ignore_label: null
+    label_offset: 0
+    mode: train
+    num_queries: 32
+    probing: false
+    small_crops: false
+    task: instance_segmentation
+    very_small_crops: false
+    voxel_size: 0.003
+  train_dataloader:
+    _target_: torch.utils.data.DataLoader
+    batch_size: 4
+    num_workers: 8
+    pin_memory: false
+    shuffle: true
+  train_dataset:
+    _target_: icg_net.data.giga_contact_dataset.GigaContactDataset
+    add_all_coordinates: false
+    add_colors: false
+    add_dex_noise: false
+    add_normals: false
+    add_raw_coordinates: true
+    add_z_coordinate: false
+    balance_grasps: true
+    balance_sdf: false
+    block_drop: 0.15
+    block_drop_size: 0.02
+    color_drop: 0.0
+    data_dir:
+    - /cluster/scratch/zrene/proc/packed_2M_coll/packed_2M_contact_0
+    - /cluster/scratch/zrene/proc/packed_2M_coll/packed_2M_contact_1
+    - /cluster/scratch/zrene/proc/packed_2M_coll/packed_2M_contact_2
+    - /cluster/scratch/zrene/proc/packed_2M_coll/packed_2M_contact_3
+    - /cluster/scratch/zrene/proc/packed_2M_coll/packed_2M_contact_4
+    - /cluster/scratch/zrene/proc/GIGA_pile_contact_coll/pile_2M_coll/pile_2M_contact_0
+    - /cluster/scratch/zrene/proc/GIGA_pile_contact_coll/pile_2M_coll/pile_2M_contact_1
+    - /cluster/scratch/zrene/proc/GIGA_pile_contact_coll/pile_2M_coll/pile_2M_contact_2
+    - /cluster/scratch/zrene/proc/GIGA_pile_contact_coll/pile_2M_coll/pile_2M_contact_3
+    - /cluster/scratch/zrene/proc/GIGA_pile_contact_coll/pile_2M_coll/pile_2M_contact_4
+    - /cluster/scratch/zrene/proc/GIGA_pile_contact_coll/pile_2M_coll/pile_2M_contact_5
+    - /cluster/scratch/zrene/proc/GIGA_pile_contact_coll/pile_2M_coll/pile_2M_contact_6
+    - /cluster/scratch/zrene/proc/GIGA_pile_contact_coll/pile_2M_coll/pile_2M_contact_7
+    - /cluster/scratch/zrene/proc/GIGA_pile_contact_coll/pile_2M_coll/pile_2M_contact_8
+    - /cluster/scratch/zrene/proc/GIGA_pile_contact_coll/pile_2M_coll/pile_2M_contact_9
+    data_percent: 1.0
+    exclude_classes:
+    - 0
+    flip_in_center: false
+    heavy_augment: true
+    load_grasps: true
+    mode: train
+    noise_rate: 0.0015
+    num_grasp_points_obj: 512
+    num_grasp_points_scene: 128
+    num_labels: 1
+    num_sdf_points: 32768
+    patch_paths:
+    - /data/processed
+    - /cluster/scratch/zrene/proc/coll_combined
+    point_drop: 0.3
+    rand_rotate: true
+    rand_translate: false
+    reps_per_epoch: 1
+    single_class: false
+    with_object_grasps: false
+  train_mode: train
+  validation_collation:
+    _target_: datasets.utils.VoxelizeCollateSDF
+    batch_instance: false
+    filter_out_classes: []
+    ignore_class_threshold: 100
+    ignore_label: null
+    label_offset: 0
+    mode: val
+    num_queries: 32
+    probing: false
+    task: instance_segmentation
+    voxel_size: 0.003
+  validation_dataloader:
+    _target_: torch.utils.data.DataLoader
+    batch_size: 1
+    num_workers: 8
+    pin_memory: false
+    shuffle: false
+  validation_dataset:
+    _target_: icg_net.data.giga_contact_dataset.GigaContactDataset
+    add_all_coordinates: false
+    add_colors: false
+    add_normals: false
+    add_raw_coordinates: true
+    add_z_coordinate: false
+    data_dir:
+    - /cluster/scratch/zrene/proc/packed_2M_coll/packed_2M_contact_0
+    - /cluster/scratch/zrene/proc/packed_2M_coll/packed_2M_contact_1
+    - /cluster/scratch/zrene/proc/packed_2M_coll/packed_2M_contact_2
+    - /cluster/scratch/zrene/proc/packed_2M_coll/packed_2M_contact_3
+    - /cluster/scratch/zrene/proc/packed_2M_coll/packed_2M_contact_4
+    - /cluster/scratch/zrene/proc/GIGA_pile_contact_coll/pile_2M_coll/pile_2M_contact_0
+    - /cluster/scratch/zrene/proc/GIGA_pile_contact_coll/pile_2M_coll/pile_2M_contact_1
+    - /cluster/scratch/zrene/proc/GIGA_pile_contact_coll/pile_2M_coll/pile_2M_contact_2
+    - /cluster/scratch/zrene/proc/GIGA_pile_contact_coll/pile_2M_coll/pile_2M_contact_3
+    - /cluster/scratch/zrene/proc/GIGA_pile_contact_coll/pile_2M_coll/pile_2M_contact_4
+    - /cluster/scratch/zrene/proc/GIGA_pile_contact_coll/pile_2M_coll/pile_2M_contact_5
+    - /cluster/scratch/zrene/proc/GIGA_pile_contact_coll/pile_2M_coll/pile_2M_contact_6
+    - /cluster/scratch/zrene/proc/GIGA_pile_contact_coll/pile_2M_coll/pile_2M_contact_7
+    - /cluster/scratch/zrene/proc/GIGA_pile_contact_coll/pile_2M_coll/pile_2M_contact_8
+    - /cluster/scratch/zrene/proc/GIGA_pile_contact_coll/pile_2M_coll/pile_2M_contact_9
+    data_percent: 0.1
+    exclude_classes:
+    - 0
+    load_grasps: true
+    mode: val
+    num_labels: 1
+    num_sdf_points: 32000
+    patch_paths:
+    - /data/processed
+    - /cluster/scratch/zrene/proc/coll_combined
+    single_class: false
+    with_object_grasps: false
+  validation_mode: val
+  voxel_size: 0.003
+general:
+  add_instance: true
+  area: 5
+  backbone_checkpoint: null
+  checkpoint: /kaggle/working/icg_benchmark/data/icgnet/51--0.656/checkpoint.ckpt
+  ckpt_resume_path: null
+  dbscan_eps: 0.95
+  dbscan_min_points: 1
+  decoder_id: -1
+  eval_inner_core: -1
+  eval_on_segments: false
+  eval_train_rate: -1
+  experiment_name: ICRA_24_both_fps_no_table_no_obj_more_scene
+  export: false
+  export_threshold: 0.0001
+  filter_out_instances: false
+  freeze_backbone: false
+  gpus: 1
+  ignore_class_threshold: 100
+  ignore_mask_idx: []
+  iou_threshold: 1.0
+  linear_probing_backbone: false
+  max_batch_size: 9999999999
+  num_mesh_eval: 10
+  num_mesh_vis: 5
+  num_targets: 7
+  on_crops: false
+  project_name: contact_both_final
+  reps_per_epoch: 1
+  save_dir: saved/ICRA_24_both_fps_no_table_no_obj_more_scene
+  save_visualizations: false
+  scores_threshold: 0.0
+  seed: 0
+  ss_warmup_epochs: 0
+  task: instance_segmentation
+  topk_per_image: 6
+  train_mode: true
+  train_on_segments: false
+  use_dbscan: false
+  vis_attention: false
+  visualization_point_size: 20
+  with_aux_losses: true
+  workspace: None
+logging:
+- _target_: pytorch_lightning.loggers.WandbLogger
+  entity: zrene
+  id: ICRA_24_both_fps_no_table_no_obj_more_scene
+  name: ICRA_24_both_fps_no_table_no_obj_more_scene
+  project: contact_both_final
+  resume: allow
+  save_dir: saved/ICRA_24_both_fps_no_table_no_obj_more_scene
+loss:
+  _target_: icg_net.criterion.criterion.SetCriterionWithWidth
+  class_weights: -1
+  eos_coef: 0.1
+  exclude_sdf_class:
+  - 0
+  grasp_loss_type: bce
+  losses:
+  - labels
+  - masks
+  - sdf
+  - grasps
+  - normals
+  num_classes: 7
+  num_points: -1
+  sdf_clip: 0.05
+  sdf_loss_type: bce
+matcher:
+  _target_: icg_net.matcher.instance_matcher.HungarianMatcher
+  cost_class: 10
+  cost_dice: 2
+  cost_mask: 5
+  cost_pose: 0
+  costs:
+    grasp_object: 0.2
+    grasp_scene: 5.0
+    grasp_width_object: 0.1
+    grasp_width_scene: 1.0
+    scene_grasp_aff: 10
+    scene_grasp_width: 1.0
+    scene_occ: 2.0
+    sdf: 5
+    sdf_matching: 0
+  num_points: -1
+model:
+  _target_: icg_net.model.icgnet.ICGNet
+  add_normalized_positions: true
+  backbone:
+    _target_: icg_net.minkowski.Res16UNetTiny
+    config:
+      bn_momentum: 0.02
+      conv1_kernel_size: 5
+    in_channels: 1
+    out_channels: 32
+    out_fpn: true
+  decoder_sa_layers: 0
+  decoder_with_scale: true
+  dense_decoder_cfg:
+    borders:
+    - 0.0
+    - 0.29
+    depth: 4
+    feature_maps: 16
+    quantization_size: 0.01
+  dim_feedforward: 128
+  gauss_scale: 2.0
+  grasp_decoder: occnet_width
+  hidden_dim: 32
+  hlevels:
+  - 1
+  - 2
+  - 3
+  - 4
+  interpolate_decoder_features: true
+  interpolation_mode: points|dense|pointnet|add_pts_pos_enc
+  learnable_embeddings: true
+  learnable_pos_embeddings: false
+  max_sample_size: 51200
+  normalize_embeddings: true
+  normalize_pos_enc: max
+  num_classes: 7
+  num_decoders: 1
+  num_heads: 8
+  num_queries: 32
+  only_one_embedding: false
+  pos_sampling_mode: fps
+  positional_encoding_type: fourier
+  pre_norm: false
+  quantization_size: 0.003
+  refine_position: false
+  repr_sort_idxs: true
+  sample_sizes:
+  - 200
+  - 800
+  - 3200
+  - 4096
+  - 8192
+  - 8192
+  - 8192
+  - 8192
+  sdf_decoder: occnet
+  shared_decoder: true
+  w_feature_render_mlp: true
+  with_grasps: true
+  with_obj_grasp_cross_attention: false
+  with_query_renderer: false
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 0.001
+scheduler:
+  pytorch_lightning_params:
+    interval: step
+  scheduler:
+    _target_: icg_net.optim.cosine_ann.LinearWarmupCosineAnnealingLR
+    eta_min: 1.0e-05
+    max_epochs: 70000
+    warmup_epochs: 800
+    warmup_start_lr: 1.0e-05
+trainer:
+  accelerator: gpu
+  accumulate_grad_batches: 2
+  check_val_every_n_epoch: 1
+  deterministic: false
+  devices:
+  - 0
+  log_every_n_steps: 10
+  max_epochs: 60
+  min_epochs: 1
+  num_sanity_val_steps: 4

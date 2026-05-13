@@ -132,16 +132,16 @@ Install the specific versions required by ICGNet and the pre-compiled MinkowskiE
 
 ```bash
 # 1. Install base requirements
-pip3 install -r requirements.txt
+pip install -r requirements.txt
 
 # 2. Install MinkowskiEngine (pre-compiled .whl in the root)
-pip3 install MinkowskiEngine-0.5.4-cp312-cp312-linux_x86_64.whl
+pip install MinkowskiEngine-0.5.4-cp312-cp312-linux_x86_64.whl
 ```
 
 ### B. Prepare the Model
 1.  **Clone the ICGNet Repository:**
     ```bash
-    git clone https://github.com/renee-f/icg_net.git ~/icg_net
+    git clone https://github.com/renezurbruegg/icg_net.git ~/icg_net
     ```
 2.  **Download Weights:** Place your `checkpoint.ckpt` and `config.yaml` in a known folder (e.g., `~/icgnet_weights/`).
 
