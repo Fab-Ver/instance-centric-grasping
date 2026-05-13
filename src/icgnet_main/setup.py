@@ -32,6 +32,7 @@ setup(
         'console_scripts': [
             'grasp_service_node = icgnet_main.grasp_service_node:main',
             'test_move_to_pose = icgnet_main.test_move_to_pose:main',
+            'direct_jtc_test = icgnet_main.direct_jtc_test:main',
         ],
     },
 )
