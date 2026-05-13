@@ -1,13 +1,18 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, SetEnvironmentVariable
+from launch.actions import IncludeLaunchDescription, SetEnvironmentVariable, DeclareLaunchArgument
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 def generate_launch_description():
     pkg_icgnet_main = get_package_share_directory('icgnet_main')
     pkg_panda_gazebo = get_package_share_directory('panda_ros2_gazebo')
+
+    target_type = LaunchConfiguration('target_type', default='coke_can')
+    num_objects = LaunchConfiguration('num_objects', default='1')
+    mode = LaunchConfiguration('mode', default='offline')
 
     # Percorso del tuo file .world
     world_path = os.path.join(pkg_icgnet_main, 'worlds', 'icgnet_table.world')
@@ -23,6 +28,21 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        DeclareLaunchArgument(
+            'target_type',
+            default_value='coke_can',
+            description='Target object type (from Gazebo DB)'
+        ),
+        DeclareLaunchArgument(
+            'num_objects',
+            default_value='3',
+            description='Total number of objects to spawn (3-5)'
+        ),
+        DeclareLaunchArgument(
+            'mode',
+            default_value='offline',
+            description='offline (local target can) or online (all from DB)'
+        ),
         set_gazebo_model_path,
         # Gazebo + Panda + RViz + controllers
         IncludeLaunchDescription(
@@ -48,5 +68,17 @@ def generate_launch_description():
             package='tf2_ros',
             executable='static_transform_publisher',
             arguments=['0', '0', '0', '-1.5708', '0', '-1.5708', 'camera_link', 'camera_link_optical'],
+        ),
+        # Spawn objects at random positions
+        Node(
+            package='icgnet_main',
+            executable='spawn_object',
+            parameters=[{
+                'target_type': target_type,
+                'num_objects': num_objects,
+                'mode': mode
+            }],
+            output='screen',
+            emulate_tty=True
         )
     ])

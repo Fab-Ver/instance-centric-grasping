@@ -33,6 +33,8 @@ setup(
             'grasp_service_node = icgnet_main.grasp_service_node:main',
             'test_move_to_pose = icgnet_main.test_move_to_pose:main',
             'direct_jtc_test = icgnet_main.direct_jtc_test:main',
+            'spawn_object = icgnet_main.spawn_object:main',
+            'spawn_one_entity = icgnet_main.spawn_one_entity:main',
         ],
     },
 )
