@@ -61,16 +61,29 @@ def generate_launch_description():
     spawn_entity = launch_ros.actions.Node(
         package="gazebo_ros",
         executable="spawn_entity.py",
-        arguments=["-topic", "robot_description", "-entity", "panda"],
+        arguments=[
+            "-topic", "robot_description",
+            "-entity", "panda",
+            "-J", "panda_joint2", "-0.785398",
+            "-J", "panda_joint4", "-2.356194",
+            "-J", "panda_joint6", "1.570796",
+            "-J", "panda_joint7", "0.785398",
+        ],
         output="screen",
     )
     effort_controller_config = os.path.join(
         get_package_share_directory("panda_ros2_gazebo"), "config", "ros_control.yaml"
     )
-    spawn_controller = launch_ros.actions.Node(
+    spawn_arm_controller = launch_ros.actions.Node(
         package="controller_manager",
         executable="spawner",
-        arguments=["joint_group_position_controller", "--param-file", effort_controller_config, "--controller-type", "effort_controllers/JointGroupPositionController"],
+        arguments=["panda_arm_controller", "--param-file", effort_controller_config],
+        output="screen",
+    )
+    spawn_hand_controller = launch_ros.actions.Node(
+        package="controller_manager",
+        executable="spawner",
+        arguments=["panda_hand_controller", "--param-file", effort_controller_config],
         output="screen",
     )
     spawn_joint_state_broadcaster = launch_ros.actions.Node(
@@ -106,7 +119,8 @@ def generate_launch_description():
         gzclient,
         gzserver,
         spawn_entity,
-        spawn_controller
+        spawn_arm_controller,
+        spawn_hand_controller
     ])
 
     return launch_description

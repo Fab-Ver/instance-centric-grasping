@@ -15,6 +15,7 @@ setup(
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
         (os.path.join('share', package_name, 'worlds'), glob('worlds/*.world')),
         (os.path.join('share', package_name, 'models', 'coke_can'), glob('models/coke_can/*')),
+        (os.path.join('share', package_name, 'config', 'moveit'), glob('config/moveit/*')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -30,6 +31,7 @@ setup(
     entry_points={
         'console_scripts': [
             'grasp_service_node = icgnet_main.grasp_service_node:main',
+            'test_move_to_pose = icgnet_main.test_move_to_pose:main',
         ],
     },
 )

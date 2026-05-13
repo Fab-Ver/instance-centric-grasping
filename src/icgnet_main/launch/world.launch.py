@@ -24,20 +24,27 @@ def generate_launch_description():
 
     return LaunchDescription([
         set_gazebo_model_path,
-        # Lanciamo il file del panda che ora accetta il parametro 'world'
+        # Gazebo + Panda + RViz + controllers
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 os.path.join(pkg_panda_gazebo, 'gazebo.launch.py')
             ),
             launch_arguments={'world': world_path}.items(),
         ),
-        # TF Gazebo Standard (Pose della camera)
+        # MoveIt2 move_group node
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                os.path.join(pkg_icgnet_main, 'launch', 'move_group.launch.py')
+            ),
+            launch_arguments={'use_sim_time': 'false'}.items(),
+        ),
+        # TF: camera position in world frame
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
             arguments=['1.3', '0', '1.2', '3.14159', '0.8', '0', 'world', 'camera_link']
         ),
-        # TF Ottico ROS (Rotazione 90 gradi per allineare PointCloud)
+        # TF: ROS optical frame convention
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
