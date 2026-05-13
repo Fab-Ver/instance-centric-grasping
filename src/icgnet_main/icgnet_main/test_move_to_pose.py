@@ -29,7 +29,7 @@ REACH = [0.0, -0.3,   0.0, -1.8,   0.0,  1.5,  0.785]
 def main():
     rclpy.init()
     node = Node('test_move_to_pose')
-    node.declare_parameter('phase', 0)
+    node.declare_parameter('phase', 0) # 0: all phases, 1: joint goal, 2: pose goal, 3: gripper
     phase = node.get_parameter('phase').get_parameter_value().integer_value
 
     cb = ReentrantCallbackGroup()
