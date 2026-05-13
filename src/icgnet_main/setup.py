@@ -29,6 +29,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'grasp_service_node = icgnet_main.grasp_service_node:main',
         ],
     },
 )
