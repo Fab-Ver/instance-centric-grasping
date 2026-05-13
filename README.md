@@ -106,22 +106,42 @@ ros2 run icgnet_main test_move_to_pose \
 
 > **Note (WSL2):** The Gazebo GUI may not render correctly on WSL2. The simulation still runs headlessly — verify it via `ros2 control list_controllers` and `ros2 topic hz /joint_states` rather than visually.
 
-### 7. Spawning Objects
-To test the grasping, you can spawn objects on the table while Gazebo is running. Open a new terminal and choose one of the following methods:
+### 7. Unified Environment & Object Spawning
+The environment now supports automated, random object spawning during initialization. You can specify the number of objects, the target type, and whether to use local or online models.
 
-**Method A: Spawn Local Model (Recommended, Instant)**
-Spawns a local model without relying on the internet.
+**Default Launch (Single local can):**
 ```bash
-ros2 run gazebo_ros spawn_entity.py -entity my_local_can -file ~/instance-centric-grasping/src/icgnet_main/models/coke_can/model.sdf -x 0.65 -y 0.0 -z 0.5
+ros2 launch icgnet_main world.launch.py
 ```
 
-**Method B: Spawn from Gazebo Online Database (Slower)**
-Downloads the model from `models.gazebosim.org`. This might hang for a few minutes on the first run while it downloads.
+**Advanced Spawning Options:**
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `mode` | `offline` (local model) or `online` (Gazebo DB) | `offline` |
+| `target_type` | Model name from Gazebo Database | `coke_can` |
+| `num_objects` | Total number of objects (1 to 5) | `1` |
+
+**Examples:**
 ```bash
-ros2 run gazebo_ros spawn_entity.py -database coke_can -entity online_can -x 0.65 -y 0.2 -z 0.5
+# Spawn 1 online coke can
+ros2 launch icgnet_main world.launch.py mode:=online
+
+# Spawn 5 objects (Target: beer bottle + 4 random distractors)
+ros2 launch icgnet_main world.launch.py target_type:=beer num_objects:=5 mode:=online
 ```
 
----
+**Supported ICGNet Categories:**
+Lo spawner sceglie i distrattori in base alle classi riconosciute da ICGNet:
+- `coke_can` (Classe: **Can**)
+- `water_bottle` (Classe: **Bottle**)
+- `wood_cube_10cm` (Classe: **Box**)
+- `cricket_ball` (Classe: **Ball**)
+- `bowl` (Classe: **Other**)
+
+> **Note sui modelli:** 
+> - `water_bottle` sostituisce `beer` per avere una vera bottiglia (non una lattina).
+> - `hammer`, `cafe_mug` e `power_drill` sono stati rimossi per instabilità fisica o assenza nel database Gazebo.
+> - Gli oggetti vengono spawnati in posizioni casuali sul tavolo, garantendo una distanza minima per evitare sovrapposizioni.
 
 ## 🧠 8. Local ICGNet Inference
 
