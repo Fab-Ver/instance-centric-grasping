@@ -22,7 +22,7 @@ def main():
 
     node = Node('test_move_to_pose')
     node.declare_parameter('position', [0.4, 0.0, 0.5])
-    node.declare_parameter('quat_xyzw', [1.0, 0.0, 0.0, 0.0])
+    node.declare_parameter('quat_xyzw', [0.0, 0.0, 0.0, 1.0])  # xyzw: identity rotation
 
     cb = ReentrantCallbackGroup()
 
