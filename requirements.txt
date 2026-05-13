@@ -1,11 +1,6 @@
-torch==2.2.0
-torchvision==0.17.0
-torchaudio==2.2.0
-numpy>=2.0.0
-scipy==1.13.1
-loguru
-open3d
-hydra-core
-cython
-scikit-learn
-trimesh
+# Dependency management is handled by uv via pyproject.toml.
+# This file is kept only for reference — do NOT use pip install -r requirements.txt.
+#
+# Setup:
+#   uv sync                  # installs all deps into .venv (Python 3.12)
+#   uv sync --group build    # also installs build tools (cython)

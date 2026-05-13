@@ -31,10 +31,26 @@ sudo apt install -y \
     python3-rosdep python3-vcstool
 ```
 
-### 2. Python Dependencies
-Install the required Python packages for pointcloud manipulation:
+### 2. Python Dependencies (uv)
+
+Python dependencies are managed by **[uv](https://docs.astral.sh/uv/)** via `pyproject.toml`. Install uv first:
+
 ```bash
-pip3 install --user open3d numpy scipy
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Then create the virtual environment and install all ML dependencies (Python 3.12 is managed automatically by uv):
+
+```bash
+cd ~/instance-centric-grasping
+uv sync
+```
+
+> **Note:** `uv sync` automatically downloads Python 3.12 if not present, creates `.venv/`, and installs all packages including PyTorch CUDA and MinkowskiEngine from the pre-compiled wheel.
+
+For build tools (cython, needed only if compiling extensions from source):
+```bash
+uv sync --group build
 ```
 
 ### 3. Initialize Rosdep
@@ -149,21 +165,30 @@ This section explains how to run ICGNet locally to compute grasp predictions fro
 
 ### A. Install the Deep Learning Stack (once per machine)
 
+All ML dependencies are declared in `pyproject.toml` and installed via **uv** (see Section 2).
+
 ```bash
-# 1. Base requirements (PyTorch, Open3D, scipy, ...)
-pip install -r requirements.txt
+# 1. Install all ML dependencies (PyTorch CUDA, MinkowskiEngine, PyG, open3d, ...)
+uv sync
 
-# 2. MinkowskiEngine — use the pre-compiled wheel (no GPU compilation needed)
-pip install MinkowskiEngine-0.5.4-cp312-cp312-linux_x86_64.whl
-
-# 3. Clone the ICGNet repository
+# 2. Clone the ICGNet repository (not a pip package — cloned separately)
 git clone https://github.com/renezurbruegg/icg_net.git ~/icg_net
 
-# 4. Clone icg_benchmark and download the checkpoint
+# 3. Clone icg_benchmark and download the checkpoint
 git clone https://github.com/renezurbruegg/icg_benchmark.git ~/icg_benchmark
 cd ~/icg_benchmark && python scripts/download_data.py
 # → checkpoint at: ~/icg_benchmark/data/icgnet/51--0.656/checkpoint.ckpt
 ```
+
+> **Python version note:** `uv sync` uses Python 3.12 (set in `.python-version`), which matches the pre-compiled MinkowskiEngine wheel (`cp312`). uv downloads Python 3.12 automatically if not present on the system.
+
+> **ROS2 + venv integration:** ROS2 Humble uses Python 3.10. To run `grasp_service_node` with both ROS2 and ML packages accessible, activate the venv first then source ROS2:
+> ```bash
+> source .venv/bin/activate
+> source /opt/ros/humble/setup.bash
+> source install/setup.bash
+> # ROS2 packages are added to PYTHONPATH on top of the venv
+> ```
 
 ### B. Configure the Parameters (once)
 

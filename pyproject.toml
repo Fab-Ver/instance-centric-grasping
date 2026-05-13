@@ -1,0 +1,68 @@
+[project]
+name = "instance-centric-grasping"
+version = "0.1.0"
+description = "ICGNet-based robotic grasping simulation with ROS2 Humble and Gazebo Classic"
+requires-python = ">=3.12"
+dependencies = [
+    # --- PyTorch (CUDA build, see [tool.uv.sources]) ---
+    "torch==2.2.0",
+    "torchvision==0.17.0",
+    "torchaudio==2.2.0",
+
+    # --- MinkowskiEngine (pre-compiled wheel, see [tool.uv.sources]) ---
+    "minkowskiengine==0.5.4",
+
+    # --- icg_net requirements ---
+    # numpy must be >=2.0 for icg_net (uses numpy.char); install ME wheel before this
+    "numpy>=2.0.0",
+    "scipy==1.13.1",
+    "hydra-core",
+    "trimesh",
+    "einops",
+    "networkx",
+
+    # --- PyTorch Geometric (CUDA build, see [tool.uv.sources]) ---
+    "torch-geometric",
+    "pyg-lib",
+    "torch-scatter",
+    "torch-sparse",
+    "torch-cluster",
+    "torch-spline-conv",
+
+    # --- ROS2 node requirements ---
+    "loguru",
+    "open3d",
+    "scikit-learn",
+]
+
+[dependency-groups]
+# Build tools only needed when compiling extensions from source (mcubes, PointNet2)
+build = [
+    "cython",
+]
+
+# ── uv index configuration ─────────────────────────────────────────────────────
+
+[[tool.uv.index]]
+# PyTorch CUDA 12.1 builds — required for torch==2.2.0+cu121
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
+
+[tool.uv.sources]
+# Redirect torch/vision/audio to the CUDA PyPI index
+torch       = { index = "pytorch-cu121" }
+torchvision = { index = "pytorch-cu121" }
+torchaudio  = { index = "pytorch-cu121" }
+
+# MinkowskiEngine: pre-compiled wheel in repo root.
+# cp312 = Python 3.12, linux x86_64. Recompile for other platforms.
+minkowskiengine = { path = "MinkowskiEngine-0.5.4-cp312-cp312-linux_x86_64.whl" }
+
+# PyG binary wheels pinned to exact CUDA+torch version (versions from Kaggle notebook).
+# torch-geometric itself is pure Python and resolves from PyPI.
+pyg-lib           = { url = "https://data.pyg.org/whl/torch-2.2.0+cu121/pyg_lib-0.4.0+pt22cu121-cp312-cp312-linux_x86_64.whl" }
+torch-scatter     = { url = "https://data.pyg.org/whl/torch-2.2.0+cu121/torch_scatter-2.1.2+pt22cu121-cp312-cp312-linux_x86_64.whl" }
+torch-sparse      = { url = "https://data.pyg.org/whl/torch-2.2.0+cu121/torch_sparse-0.6.18+pt22cu121-cp312-cp312-linux_x86_64.whl" }
+torch-cluster     = { url = "https://data.pyg.org/whl/torch-2.2.0+cu121/torch_cluster-1.6.3+pt22cu121-cp312-cp312-linux_x86_64.whl" }
+torch-spline-conv = { url = "https://data.pyg.org/whl/torch-2.2.0+cu121/torch_spline_conv-1.2.2+pt22cu121-cp312-cp312-linux_x86_64.whl" }
