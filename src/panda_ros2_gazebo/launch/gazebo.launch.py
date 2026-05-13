@@ -61,14 +61,7 @@ def generate_launch_description():
     spawn_entity = launch_ros.actions.Node(
         package="gazebo_ros",
         executable="spawn_entity.py",
-        arguments=[
-            "-topic", "robot_description",
-            "-entity", "panda",
-            "-J", "panda_joint2", "-0.785398",
-            "-J", "panda_joint4", "-2.356194",
-            "-J", "panda_joint6", "1.570796",
-            "-J", "panda_joint7", "0.785398",
-        ],
+        arguments=["-topic", "robot_description", "-entity", "panda"],
         output="screen",
     )
     effort_controller_config = os.path.join(

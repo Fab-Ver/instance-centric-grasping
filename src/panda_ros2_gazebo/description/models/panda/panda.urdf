@@ -414,8 +414,12 @@
           <param name="min">-2.8973</param>
           <param name="max">2.8973</param>
         </command_interface>
-        <state_interface name="position"/>
-        <state_interface name="velocity"/>
+        <state_interface name="position">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="velocity">
+          <param name="initial_value">0.0</param>
+        </state_interface>
       </joint>
 
       <joint name="panda_joint2">
@@ -423,8 +427,12 @@
           <param name="min">-1.7628</param>
           <param name="max">1.7628</param>
         </command_interface>
-        <state_interface name="position"/>
-        <state_interface name="velocity"/>
+        <state_interface name="position">
+          <param name="initial_value">-0.785398</param>
+        </state_interface>
+        <state_interface name="velocity">
+          <param name="initial_value">0.0</param>
+        </state_interface>
       </joint>
 
       <joint name="panda_joint3">
@@ -432,17 +440,25 @@
           <param name="min">-2.8973</param>
           <param name="max">2.8973</param>
         </command_interface>
-        <state_interface name="position"/>
-        <state_interface name="velocity"/>
+        <state_interface name="position">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="velocity">
+          <param name="initial_value">0.0</param>
+        </state_interface>
       </joint>
 
       <joint name="panda_joint4">
         <command_interface name="position">
           <param name="min">-3.0718</param>
-          <param name="max">-0.0698</param>
+          <param name="max">0.0698</param>
         </command_interface>
-        <state_interface name="position"/>
-        <state_interface name="velocity"/>
+        <state_interface name="position">
+          <param name="initial_value">-2.356194</param>
+        </state_interface>
+        <state_interface name="velocity">
+          <param name="initial_value">0.0</param>
+        </state_interface>
       </joint>
 
       <joint name="panda_joint5">
@@ -450,8 +466,12 @@
           <param name="min">-2.8973</param>
           <param name="max">2.8973</param>
         </command_interface>
-        <state_interface name="position"/>
-        <state_interface name="velocity"/>
+        <state_interface name="position">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="velocity">
+          <param name="initial_value">0.0</param>
+        </state_interface>
       </joint>
 
       <joint name="panda_joint6">
@@ -459,8 +479,12 @@
           <param name="min">-0.0175</param>
           <param name="max">3.7525</param>
         </command_interface>
-        <state_interface name="position"/>
-        <state_interface name="velocity"/>
+        <state_interface name="position">
+          <param name="initial_value">1.570796</param>
+        </state_interface>
+        <state_interface name="velocity">
+          <param name="initial_value">0.0</param>
+        </state_interface>
       </joint>
 
       <joint name="panda_joint7">
@@ -468,8 +492,12 @@
           <param name="min">-2.8973</param>
           <param name="max">2.8973</param>
         </command_interface>
-        <state_interface name="position"/>
-        <state_interface name="velocity"/>
+        <state_interface name="position">
+          <param name="initial_value">0.785398</param>
+        </state_interface>
+        <state_interface name="velocity">
+          <param name="initial_value">0.0</param>
+        </state_interface>
       </joint>
 
       <joint name="panda_finger_joint1">
