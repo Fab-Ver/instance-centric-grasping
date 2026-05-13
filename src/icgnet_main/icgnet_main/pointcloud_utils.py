@@ -27,35 +27,39 @@ def pointcloud2_to_numpy(msg):
         data = data.reshape(-1, floats_per_point)
         return data[:, :3].copy()
 
-def process_point_cloud(points_np, voxel_size=0.01, nb_neighbors=20, std_ratio=2.0):
+def process_point_cloud(points_np, voxel_size=0.01, nb_neighbors=20, std_ratio=2.0,
+                        camera_position=(0.0, 0.0, 0.0)):
     """
     Preprocessa la point cloud per ICGNet:
     - Downsampling (Voxel Grid)
     - Rimozione Outlier
-    - Stima delle Normali (richieste dal modello)
+    - Stima delle Normali orientate verso la camera (richiesto da ICGNet)
+
+    Args:
+        camera_position: posizione della camera nel frame della cloud (tuple/array 3D).
+                         Necessario per orientare le normali correttamente.
     """
     if points_np.shape[0] == 0:
-        return np.array([]), np.array([])
+        return np.array([]).reshape(0, 3), np.array([]).reshape(0, 3)
 
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(points_np)
-    
-    # 1. Voxel Downsampling per migliorare le performance e uniformare la densità
+
+    # 1. Voxel Downsampling
     pcd = pcd.voxel_down_sample(voxel_size=voxel_size)
-    
+
     # 2. Pulizia rumore statistico
     pcd, _ = pcd.remove_statistical_outlier(nb_neighbors=nb_neighbors, std_ratio=std_ratio)
-    
-    # 3. Calcolo Normali
-    # ICGNet necessita delle normali per orientare i grasp correttamente
-    pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=voxel_size*5, max_nn=30))
-    # Orienta le normali verso la camera (assumendo Z positivo verso l'alto/camera)
-    pcd.orient_normals_to_align_with_direction(orientation_reference=np.array([0., 0., 1.]))
-    
-    points = np.asarray(pcd.points)
-    normals = np.asarray(pcd.normals)
-    
-    return points, normals
+
+    # 3. Stima normali + orientamento verso la camera
+    pcd.estimate_normals(
+        search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=voxel_size * 5, max_nn=30)
+    )
+    pcd.orient_normals_towards_camera_location(
+        np.array(camera_position, dtype=np.float64)
+    )
+
+    return np.asarray(pcd.points), np.asarray(pcd.normals)
 
 def to_torch_tensors(points, normals, device='cuda'):
     """

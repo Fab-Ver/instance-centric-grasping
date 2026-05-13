@@ -145,43 +145,98 @@ Lo spawner sceglie i distrattori in base alle classi riconosciute da ICGNet:
 
 ## 🧠 8. Local ICGNet Inference
 
-This section explains how to run the ICGNet model locally to obtain grasp poses.
+This section explains how to run ICGNet locally to compute grasp predictions from the Gazebo pointcloud and visualize them in RViz.
 
-### A. Install Python Deep Learning Stack
-Install the specific versions required by ICGNet and the pre-compiled MinkowskiEngine:
+### A. Install the Deep Learning Stack (once per machine)
 
 ```bash
-# 1. Install base requirements
+# 1. Base requirements (PyTorch, Open3D, scipy, ...)
 pip install -r requirements.txt
 
-# 2. Install MinkowskiEngine (pre-compiled .whl in the root)
+# 2. MinkowskiEngine — use the pre-compiled wheel (no GPU compilation needed)
 pip install MinkowskiEngine-0.5.4-cp312-cp312-linux_x86_64.whl
+
+# 3. Clone the ICGNet repository
+git clone https://github.com/renezurbruegg/icg_net.git ~/icg_net
+
+# 4. Clone icg_benchmark and download the checkpoint
+git clone https://github.com/renezurbruegg/icg_benchmark.git ~/icg_benchmark
+cd ~/icg_benchmark && python scripts/download_data.py
+# → checkpoint at: ~/icg_benchmark/data/icgnet/51--0.656/checkpoint.ckpt
 ```
 
-### B. Prepare the Model
-1.  **Clone the ICGNet Repository:**
-    ```bash
-    git clone https://github.com/renezurbruegg/icg_net.git ~/icg_net
-    ```
-2.  **Download Weights:** Place your `checkpoint.ckpt` and `config.yaml` in a known folder (e.g., `~/icgnet_weights/`).
+### B. Configure the Parameters (once)
 
-### C. Run the Grasp Service Node
-Launch the node that bridges the camera data with the ICGNet model:
+Edit `src/icgnet_main/config/icgnet_params.yaml` and set the two paths:
 
+```yaml
+icgnet_grasp_node:
+  ros__parameters:
+    config_path:      "~/icg_benchmark/data/icgnet/51--0.656/config.yaml"
+    icgnet_repo_path: "~/icg_net"
+    # Other parameters (camera_topic, n_grasps, score_threshold) have sensible defaults
+```
+
+### C. Run the Full Pipeline
+
+**Terminal 1 — Simulation + RViz:**
 ```bash
-ros2 run icgnet_main grasp_service_node \
-    --ros-args \
-    -p config_path:="/home/user/icgnet_weights/config.yaml" \
-    -p icgnet_repo_path:="/home/user/icg_net" \
-    -p camera_topic:="/camera/rgbd_camera/points"
+source install/setup.bash
+ros2 launch icgnet_main world.launch.py
+```
+RViz opens automatically with the ICGNet grasp displays pre-loaded (`ICGNet Grasps` MarkerArray).
+
+**Terminal 2 — ICGNet Inference Node:**
+```bash
+source install/setup.bash
+ros2 launch icgnet_main icgnet_inference.launch.py
+# Wait for: "ICGNet caricato correttamente." (model loading takes ~10-20s on GPU)
 ```
 
-### D. Trigger Grasp Calculation
-To compute the grasps for the current scene, call the service:
+**Terminal 3 — Trigger a Prediction:**
 ```bash
 ros2 service call /icgnet/compute_grasps std_srvs/srv/Trigger
+# Output: success=True, message="32 grasp pubblicati (32 totali, soglia score>=0.0)"
 ```
-The resulting poses will be published to `/icgnet/grasps` as a `PoseArray`. You can visualize them in RViz by adding a **PoseArray** display.
 
-### E. MoveIt2 Integration
-Use the `/icgnet/grasps` topic to feed your planning pipeline. The poses are relative to the camera frame (`camera_depth_optical_frame`).
+### D. Visualize in RViz
+
+The RViz instance started by `world.launch.py` already has two displays configured:
+
+| Display | Topic | Description |
+|---------|-------|-------------|
+| **ICGNet Grasps** | `/icgnet/grasps_markers` | Arrows colored by score: 🟢 green = high quality, 🔴 red = low |
+| ICGNet PoseArray | `/icgnet/grasps` | Standard ROS pose axes (disabled by default) |
+
+Each arrow points along the gripper approach direction. Grasp centers are placed on the detected objects.
+
+> **Tip:** Increase `score_threshold` in `icgnet_params.yaml` (e.g. `0.5`) to show only the best grasps and reduce visual clutter.
+
+### E. Architecture & Topics
+
+```
+Gazebo Camera
+  └─ /camera/rgbd_camera/points  (PointCloud2, BEST_EFFORT)
+       │
+       ▼
+  grasp_service_node
+  ├─ Transforms cloud: camera_link_optical → world (via tf2)
+  ├─ Preprocesses: voxel downsample + normal estimation
+  ├─ Runs ICGNet inference
+  └─ Publishes:
+       ├─ /icgnet/grasps          (PoseArray, frame=world)
+       └─ /icgnet/grasps_markers  (MarkerArray, arrows colored by score)
+```
+
+Grasp poses are published in the **`world` frame** (table at z=0, as required by ICGNet).
+The future `grasp_executor` will only need to transform `world → panda_link0` before sending to MoveIt2.
+
+### F. Troubleshooting
+
+| Symptom | Likely Cause | Fix |
+|---------|-------------|-----|
+| `"Nessuna pointcloud ricevuta"` | Gazebo not running or wrong topic | Check `ros2 topic hz /camera/rgbd_camera/points` |
+| `"TF lookup fallito"` | `world.launch.py` not running | Launch simulation first |
+| `"ICGNet non inizializzato"` | Wrong paths in YAML | Check `config_path` and `icgnet_repo_path` |
+| Arrows appear at wrong location | Fixed Frame mismatch | Set RViz Fixed Frame to `world` |
+| No arrows after trigger | All grasps below threshold | Set `score_threshold: 0.0` in YAML |
