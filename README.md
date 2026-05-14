@@ -107,41 +107,59 @@ ros2 run icgnet_main test_move_to_pose \
 > **Note (WSL2):** The Gazebo GUI may not render correctly on WSL2. The simulation still runs headlessly — verify it via `ros2 control list_controllers` and `ros2 topic hz /joint_states` rather than visually.
 
 ### 7. Unified Environment & Object Spawning
-The environment now supports automated, random object spawning during initialization. You can specify the number of objects, the target type, and whether to use local or online models.
+The environment supports automated, random object spawning during initialization. You can specify the number of objects and the target type. Note: All required models must be downloaded locally first using the provided script.
 
-**Default Launch (Single local can):**
+**Prerequisite:** Download models locally
 ```bash
-ros2 launch icgnet_main world.launch.py
+python3 scripts/download_gazebo_models.py
 ```
 
 **Advanced Spawning Options:**
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `mode` | `offline` (local model) or `online` (Gazebo DB) | `offline` |
-| `target_type` | Model name from Gazebo Database | `coke_can` |
+| `target_type` | Model name (e.g., `coke_can`, `cricket_ball`) | `cylinder_offline` |
 | `num_objects` | Total number of objects (1 to 5) | `1` |
 
-**Examples:**
-```bash
-# Spawn 1 online coke can
-ros2 launch icgnet_main world.launch.py mode:=online
+**Case Scenarios:**
 
-# Spawn 5 objects (Target: beer bottle + 4 random distractors)
-ros2 launch icgnet_main world.launch.py target_type:=beer num_objects:=5 mode:=online
+**1. Default (Single Offline Cylinder)**
+Spawna solo il cilindro locale in posizione casuale.
+```bash
+ros2 launch icgnet_main world.launch.py
+```
+
+**2. Single Target**
+Spawna solo una palla da cricket.
+```bash
+ros2 launch icgnet_main world.launch.py target_type:=cricket_ball num_objects:=1
+```
+
+**3. Multi-Object (Target + Random Distractors)**
+Spawna 1 target (es. `bowl`) e 4 distrattori scelti a caso tra le classi ICGNet (incluso il cilindro offline).
+```bash
+ros2 launch icgnet_main world.launch.py target_type:=bowl num_objects:=5
+```
+
+**4. Specific Object Spawn (Fixed Position)**
+Per debug, spawna un oggetto specifico in posizione fissa (x=0.65, y=0.0).
+```bash
+ros2 run icgnet_main spawn_one_entity <model_name> <entity_name>
+# Esempio:
+ros2 run icgnet_main spawn_one_entity wood_cube_10cm cubo_test
 ```
 
 **Supported ICGNet Categories:**
-Lo spawner sceglie i distrattori in base alle classi riconosciute da ICGNet:
+Lo spawner seleziona i distrattori in base alle classi riconosciute da ICGNet:
 - `coke_can` (Classe: **Can**)
-- `water_bottle` (Classe: **Bottle**)
 - `wood_cube_10cm` (Classe: **Box**)
 - `cricket_ball` (Classe: **Ball**)
-- `bowl` (Classe: **Other**)
+- `bowl` (Classe: **Mug/Other**)
+- `cylinder_offline` (Classe: **Cylindric**)
+- `monkey_wrench` (Classe: **Other**)
 
-> **Note sui modelli:** 
-> - `water_bottle` sostituisce `beer` per avere una vera bottiglia (non una lattina).
-> - `hammer`, `cafe_mug` e `power_drill` sono stati rimossi per instabilità fisica o assenza nel database Gazebo.
+> **Note:**
 > - Gli oggetti vengono spawnati in posizioni casuali sul tavolo, garantendo una distanza minima per evitare sovrapposizioni.
+> - Se `num_objects > 1`, i distrattori vengono scelti casualmente dalla lista sopra.
 
 ## 🧠 8. Local ICGNet Inference
 

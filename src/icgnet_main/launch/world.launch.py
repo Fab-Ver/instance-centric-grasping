@@ -30,18 +30,13 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             'target_type',
-            default_value='coke_can',
-            description='Target object type (from Gazebo DB)'
+            default_value='cylinder_offline',
+            description='Target object type'
         ),
         DeclareLaunchArgument(
             'num_objects',
-            default_value='3',
-            description='Total number of objects to spawn (3-5)'
-        ),
-        DeclareLaunchArgument(
-            'mode',
-            default_value='offline',
-            description='offline (local target can) or online (all from DB)'
+            default_value='1',
+            description='Total number of objects to spawn (1-5)'
         ),
         set_gazebo_model_path,
         # Gazebo + Panda + RViz + controllers
@@ -75,8 +70,7 @@ def generate_launch_description():
             executable='spawn_object',
             parameters=[{
                 'target_type': target_type,
-                'num_objects': num_objects,
-                'mode': mode
+                'num_objects': num_objects
             }],
             output='screen',
             emulate_tty=True

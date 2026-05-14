@@ -13,17 +13,15 @@ class ObjectSpawner(Node):
         super().__init__('object_spawner')
         self.declare_parameter('target_type', 'coke_can')
         self.declare_parameter('num_objects', 1)
-        self.declare_parameter('mode', 'offline')
 
         self.target_type = str(self.get_parameter('target_type').value)
         try:
             self.num_objects = int(self.get_parameter('num_objects').value)
         except:
             self.num_objects = 1
-        self.mode = str(self.get_parameter('mode').value)
         
-        # Valid classes
-        self.categories = ['coke_can', 'beer', 'bowl', 'cricket_ball', 'wood_cube_10cm']
+        # Valid classes mapping to ICGNet categories
+        self.categories = ['coke_can', 'bowl', 'cricket_ball', 'wood_cube_10cm', 'monkey_wrench', 'cylinder_offline']
         
         self.get_logger().info('==========================================')
         self.get_logger().info(f'SPAWNER MODE: {"MULTI" if self.num_objects > 1 else "SINGLE"}')
@@ -50,8 +48,8 @@ class ObjectSpawner(Node):
 
     def spawn_all(self):
         existing_poses = []
-        self.get_logger().info('Waiting 10s for Gazebo...')
-        time.sleep(10.0)
+        self.get_logger().info('Waiting 5s for Gazebo...')
+        time.sleep(5.0)
         
         # ALWAYS spawn the target first
         self.spawn_one(self.target_type, 'target_obj', existing_poses, is_target=True)
@@ -60,8 +58,8 @@ class ObjectSpawner(Node):
         if self.num_objects > 1:
             self.get_logger().info(f'Spawning {self.num_objects - 1} distractors...')
             for i in range(self.num_objects - 1):
-                self.get_logger().info('Waiting 5s for next distractor...')
-                time.sleep(5.0)
+                self.get_logger().info('Waiting 0.5s for next distractor...')
+                time.sleep(0.5)
                 obj_type = random.choice(self.categories)
                 # Avoid target as distractor if possible
                 if obj_type == self.target_type:
@@ -86,7 +84,7 @@ class ObjectSpawner(Node):
             '-Y', f'{yaw:.3f}'
         ]
 
-        if self.mode == 'offline' and is_target and model_name == 'coke_can':
+        if model_name == 'cylinder_offline':
             pkg_path = get_package_share_directory('icgnet_main')
             model_path = os.path.join(pkg_path, 'models', 'coke_can', 'model.sdf')
             cmd += ['-file', model_path]
