@@ -263,6 +263,38 @@ Visualization Manager:
       Use Fixed Frame: true
       Use rainbow: true
       Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: ICGNet Grasps
+      Namespaces:
+        icgnet_grasps: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /icgnet/grasps_markers
+      Value: true
+    - Alpha: 0.9
+      Arrow Length: 0.05
+      Axes Length: 0.05
+      Axes Radius: 0.005
+      Class: rviz_default_plugins/PoseArray
+      Color: 0; 200; 0
+      Enabled: false
+      Head Length: 0.02
+      Head Radius: 0.01
+      Name: ICGNet PoseArray (raw)
+      Shaft Length: 0.03
+      Shaft Radius: 0.005
+      Shape: Arrow3D
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /icgnet/grasps
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
