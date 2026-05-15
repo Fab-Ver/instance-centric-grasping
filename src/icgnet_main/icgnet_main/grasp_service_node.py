@@ -232,21 +232,17 @@ class ICGNetGraspNode(Node):
         widths       = output.scene_grasp_poses[3].cpu().numpy()
         inst_ids     = output.scene_grasp_poses[4].cpu().numpy()
 
-        if hasattr(output, 'class_predictions') and output.class_predictions is not None:
-            cls = output.class_predictions.cpu().numpy().flatten()
-        else:
-            cls = np.zeros(len(centers), dtype=int)
-
+        
         n_total = len(centers)
 
         # 6. Filtra per score
         mask = scores >= self.score_threshold
-        rot_f    = rot_matrices[mask]
+        rot_f     = rot_matrices[mask]
         centers_f = centers[mask]
         scores_f  = scores[mask]
         widths_f  = widths[mask]
         inst_f    = inst_ids[mask]
-        cls_f     = cls[mask] if len(cls) >= len(centers) else np.zeros(mask.sum(), dtype=int)
+        #cls_f     = cls[mask] if len(cls) >= len(centers) else np.zeros(mask.sum(), dtype=int)
 
         now = self.get_clock().now().to_msg()
 

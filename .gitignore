@@ -322,6 +322,7 @@ Makefile
 # === OS files ===
 .DS_Store
 Thumbs.db
+cuda-keyring_1.1-1_all.deb
 
 # === Generated message/service files (ROS 1 legacy) ===
 # (uncomment if you also maintain ROS 1 packages)

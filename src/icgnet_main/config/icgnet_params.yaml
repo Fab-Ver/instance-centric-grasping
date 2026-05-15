@@ -4,7 +4,7 @@ icgnet_grasp_node:
     # Percorso assoluto al config.yaml del checkpoint ICGNet.
     # Supporta ~ (home expansion). Esempio:
     #   config_path: "~/icg_benchmark/data/icgnet/51--0.656/config.yaml"
-    config_path: "~/icg_benchmark/data/icgnet/51--0.656/config.yaml"
+    config_path: "~/Robotics_Project/instance-centric-grasping/icgnet_weights/config.yaml"
 
     # Percorso alla root del repository icg_net clonato.
     # Esempio: "~/icg_net"

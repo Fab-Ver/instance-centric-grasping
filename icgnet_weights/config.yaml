@@ -197,7 +197,7 @@ general:
   add_instance: true
   area: 5
   backbone_checkpoint: null
-  checkpoint: /kaggle/working/icg_benchmark/data/icgnet/51--0.656/checkpoint.ckpt
+  checkpoint: /home/alber/Robotics_Project/instance-centric-grasping/icgnet_weights/checkpoint.ckpt
   ckpt_resume_path: null
   dbscan_eps: 0.95
   dbscan_min_points: 1
