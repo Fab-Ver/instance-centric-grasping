@@ -183,30 +183,13 @@ This section explains how to run ICGNet locally to compute grasp predictions fro
 
 ### A. Install the Deep Learning Stack (once per machine)
 
-All ML dependencies are declared in `pyproject.toml` and installed via **uv** (see Section 2).
+**Full step-by-step guide**: `LOCAL_INFERENCE_SETUP.md` in the repo root.
 
-```bash
-# 1. Install all ML dependencies (PyTorch CUDA, MinkowskiEngine, PyG, open3d, ...)
-uv sync
-
-# 2. Clone the ICGNet repository (not a pip package — cloned separately)
-git clone https://github.com/renezurbruegg/icg_net.git ~/icg_net
-
-# 3. Clone icg_benchmark and download the checkpoint
-git clone https://github.com/renezurbruegg/icg_benchmark.git ~/icg_benchmark
-cd ~/icg_benchmark && python scripts/download_data.py
-# → checkpoint at: ~/icg_benchmark/data/icgnet/51--0.656/checkpoint.ckpt
-```
-
-> **Python version note:** `uv sync` uses Python 3.12 (set in `.python-version`), which matches the pre-compiled MinkowskiEngine wheel (`cp312`). uv downloads Python 3.12 automatically if not present on the system.
-
-> **ROS2 + venv integration:** ROS2 Humble uses Python 3.10. To run `grasp_service_node` with both ROS2 and ML packages accessible, activate the venv first then source ROS2:
-> ```bash
-> source .venv/bin/activate
-> source /opt/ros/humble/setup.bash
-> source install/setup.bash
-> # ROS2 packages are added to PYTHONPATH on top of the venv
-> ```
+Key points:
+- Uses **Python 3.10** (system) + standard `venv` + `pip`. Do **not** use `uv sync` on the GPU machine — that is for the Kaggle path only.
+- MinkowskiEngine must be **compiled from source** from the patched fork (`renezurbruegg/MinkowskiEngine`). Set `TORCH_CUDA_ARCH_LIST` to your GPU's compute capability only (e.g. `"8.6"` for RTX 30xx, `"6.1"` for GTX 10xx) to avoid OOM.
+- `icg_net` cannot be installed with `pip install -e` (setuptools ≥ 67 bug). Use `python setup.py develop` or a `.pth` file. A patched `icg_net/icg_net/icg_net.py` is in `scripts/patches/` — copy it over before running.
+- **numpy must be `1.26.4`** (not ≥2.0) for compatibility with PyTorch 2.2.0.
 
 ### B. Configure the Parameters (once)
 
@@ -224,6 +207,7 @@ icgnet_grasp_node:
 
 **Terminal 1 — Simulation + RViz:**
 ```bash
+source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 launch icgnet_main world.launch.py
 ```
@@ -231,15 +215,21 @@ RViz opens automatically with the ICGNet grasp displays pre-loaded (`ICGNet Gras
 
 **Terminal 2 — ICGNet Inference Node:**
 ```bash
+source /opt/ros/humble/setup.bash
 source install/setup.bash
+export PYTHONPATH=~/instance-centric-grasping/.venv/lib/python3.10/site-packages:$PYTHONPATH
 ros2 launch icgnet_main icgnet_inference.launch.py
 # Wait for: "ICGNet caricato correttamente." (model loading takes ~10-20s on GPU)
 ```
 
+> **Note:** `source .venv/bin/activate` is NOT sufficient — the installed executable has a hardcoded shebang pointing to the system Python. `PYTHONPATH` is the correct mechanism to expose the venv's ML packages to the system Python 3.10.
+
 **Terminal 3 — Trigger a Prediction:**
 ```bash
+source /opt/ros/humble/setup.bash
+source install/setup.bash
 ros2 service call /icgnet/compute_grasps std_srvs/srv/Trigger
-# Output: success=True, message="32 grasp pubblicati (32 totali, soglia score>=0.0)"
+# Output: success=True, message="N grasp pubblicati (N totali, soglia score>=0.0)"
 ```
 
 ### D. Visualize in RViz
@@ -281,5 +271,8 @@ The future `grasp_executor` will only need to transform `world → panda_link0` 
 | `"Nessuna pointcloud ricevuta"` | Gazebo not running or wrong topic | Check `ros2 topic hz /camera/rgbd_camera/points` |
 | `"TF lookup fallito"` | `world.launch.py` not running | Launch simulation first |
 | `"ICGNet non inizializzato"` | Wrong paths in YAML | Check `config_path` and `icgnet_repo_path` |
+| `ModuleNotFoundError: torch` at launch | PYTHONPATH not set | Add `export PYTHONPATH=~/.../venv/lib/python3.10/site-packages:$PYTHONPATH` before launch |
+| `Cannot find primary config '...'` | hydra.experimental bug | Copy `scripts/patches/icg_net.py` → `~/icg_net/icg_net/icg_net.py` |
+| ME compile killed (OOM) | Too many CUDA architectures | Set `TORCH_CUDA_ARCH_LIST` to your GPU only (e.g. `"6.1"`) and `MAX_JOBS=2` |
 | Arrows appear at wrong location | Fixed Frame mismatch | Set RViz Fixed Frame to `world` |
 | No arrows after trigger | All grasps below threshold | Set `score_threshold: 0.0` in YAML |
