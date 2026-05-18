@@ -208,22 +208,46 @@ class GraspExecutorNode(Node):
 
         pre_pos = (pos - self._approach_offset * approach).tolist()
 
-        self._arm.move_to_pose(position=pre_pos, quat_xyzw=quat_xyzw)
-        if not self._arm.wait_until_executed():
-            self.get_logger().warn("Pre-grasp motion failed (IK or path planning error)")
-            return False
+        self.get_logger().info(
+            f"[DIAG] grasp_pos=[{pos[0]:.4f},{pos[1]:.4f},{pos[2]:.4f}] "
+            f"pre_pos=[{pre_pos[0]:.4f},{pre_pos[1]:.4f},{pre_pos[2]:.4f}] "
+            f"quat=[{quat_xyzw[0]:.4f},{quat_xyzw[1]:.4f},{quat_xyzw[2]:.4f},{quat_xyzw[3]:.4f}] "
+            f"approach=[{approach[0]:.4f},{approach[1]:.4f},{approach[2]:.4f}] "
+            f"width={g.width:.4f}"
+        )
 
-        self._arm.move_to_pose(position=pos.tolist(), quat_xyzw=quat_xyzw)
-        if not self._arm.wait_until_executed():
-            self.get_logger().warn("Grasp approach motion failed")
+        t0 = time.time()
+        self._arm.move_to_pose(position=pre_pos, quat_xyzw=quat_xyzw)
+        ok = self._arm.wait_until_executed()
+        dt = time.time() - t0
+        if not ok:
+            self.get_logger().warn(
+                f"[DIAG] PRE-GRASP FAILED in {dt:.2f}s "
+                f"target=[{pre_pos[0]:.4f},{pre_pos[1]:.4f},{pre_pos[2]:.4f}]"
+            )
             return False
+        self.get_logger().info(f"[DIAG] pre-grasp OK in {dt:.2f}s")
+
+        t0 = time.time()
+        self._arm.move_to_pose(position=pos.tolist(), quat_xyzw=quat_xyzw)
+        ok = self._arm.wait_until_executed()
+        dt = time.time() - t0
+        if not ok:
+            self.get_logger().warn(
+                f"[DIAG] APPROACH FAILED in {dt:.2f}s "
+                f"target=[{pos[0]:.4f},{pos[1]:.4f},{pos[2]:.4f}]"
+            )
+            return False
+        self.get_logger().info(f"[DIAG] approach OK in {dt:.2f}s")
 
         self._gripper.close()
         self._gripper.wait_until_executed()
 
         lift_pos = (pos + np.array([0.0, 0.0, self._lift_height])).tolist()
+        t0 = time.time()
         self._arm.move_to_pose(position=lift_pos, quat_xyzw=quat_xyzw)
         self._arm.wait_until_executed()
+        self.get_logger().info(f"[DIAG] lift done in {time.time()-t0:.2f}s")
 
         return True
 
