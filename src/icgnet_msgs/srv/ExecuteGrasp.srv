@@ -1,0 +1,8 @@
+# target: 'any' | 'mug' | 'box' | 'can' | 'bottle' | 'cylindric' | 'ball' | 'other' | 'instance_<N>'
+string target
+float32 min_score
+int32 max_attempts
+---
+bool success
+int32 grasps_attempted
+string message
