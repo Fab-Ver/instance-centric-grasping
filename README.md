@@ -31,36 +31,15 @@ sudo apt install -y \
     python3-rosdep python3-vcstool
 ```
 
-### 2. Python Dependencies (uv)
+### 2. Initialize Rosdep
 
-Python dependencies are managed by **[uv](https://docs.astral.sh/uv/)** via `pyproject.toml`. Install uv first:
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-Then create the virtual environment and install all ML dependencies (Python 3.12 is managed automatically by uv):
-
-```bash
-cd ~/instance-centric-grasping
-uv sync
-```
-
-> **Note:** `uv sync` automatically downloads Python 3.12 if not present, creates `.venv/`, and installs all packages including PyTorch CUDA and MinkowskiEngine from the pre-compiled wheel.
-
-For build tools (cython, needed only if compiling extensions from source):
-```bash
-uv sync --group build
-```
-
-### 3. Initialize Rosdep
 Initialize and update `rosdep` to manage ROS package dependencies:
 ```bash
 sudo rosdep init
 rosdep update
 ```
 
-### 4. Setup and Build the Workspace
+### 3. Setup and Build the Workspace
 Assuming you have cloned this repository, follow these steps to build the workspace. Note that the necessary robot packages (`franka_description`, `panda_ros2_gazebo`) and our custom packages (`icgnet_main`, `icgnet_msgs`) are already included in the `src` folder.
 
 ```bash
@@ -87,7 +66,7 @@ source install/setup.bash
 > **Tip:** To automatically load the workspace in every new terminal, add this to your `~/.bashrc`:
 > `echo "source ~/instance-centric-grasping/install/setup.bash" >> ~/.bashrc`
 
-### 5. Verification (Smoke Test)
+### 4. Verification (Smoke Test)
 To verify that everything is installed correctly, launch the unified environment (Gazebo + RViz + TF + Robot):
 
 ```bash
@@ -97,7 +76,7 @@ ros2 launch icgnet_main world.launch.py
 
 > **Note for RViz:** When you open RViz for the first time, add a `PointCloud2` display, set the topic to `/camera/rgbd_camera/points` (or `/camera/points`), and change the Fixed Frame to `camera_link`. Then go to `File -> Save Config` to make this automatic for future launches.
 
-### 6. MoveIt2 Test
+### 5. MoveIt2 Test
 
 Once the simulation is running, verify the MoveIt2 pipeline is fully operational from a second terminal:
 
@@ -129,7 +108,7 @@ ros2 run icgnet_main test_move_to_pose \
 
 > **Note (WSL2):** The Gazebo GUI may not render correctly on WSL2. The simulation still runs headlessly — verify it via `ros2 control list_controllers` and `ros2 topic hz /joint_states` rather than visually.
 
-### 7. Unified Environment & Object Spawning
+### 6. Unified Environment & Object Spawning
 The environment supports automated, random object spawning during initialization. You can specify the number of objects and the target type. Note: All required models must be downloaded locally first using the provided script.
 
 **Prerequisite:** Download models locally
@@ -193,7 +172,7 @@ This section explains how to run ICGNet locally to compute grasp predictions fro
 **Full step-by-step guide**: `LOCAL_INFERENCE_SETUP.md` in the repo root.
 
 Key points:
-- Uses **Python 3.10** (system) + standard `venv` + `pip`. Do **not** use `uv sync` on the GPU machine — that is for the Kaggle path only.
+- Uses **Python 3.10** (system) + standard `venv` + `pip`.
 - MinkowskiEngine must be **compiled from source** from the patched fork (`renezurbruegg/MinkowskiEngine`). Set `TORCH_CUDA_ARCH_LIST` to your GPU's compute capability only (e.g. `"8.6"` for RTX 30xx, `"6.1"` for GTX 10xx) to avoid OOM.
 - `icg_net` cannot be installed with `pip install -e` (setuptools ≥ 67 bug). Use `python setup.py develop` or a `.pth` file. A patched `icg_net/icg_net/icg_net.py` is in `scripts/patches/` — copy it over before running.
 - **numpy must be `1.26.4`** (not ≥2.0) for compatibility with PyTorch 2.2.0.
