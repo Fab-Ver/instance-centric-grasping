@@ -248,7 +248,7 @@ setuptools >= 64. Usa il build standard:
 ```bash
 source /opt/ros/humble/setup.bash
 cd ~/Robotics_Project/instance-centric-grasping
-colcon build --packages-select icgnet_main panda_ros2_gazebo
+colcon build --packages-select icgnet_main panda_ros2_gazebo icgnet_msgs
 source install/setup.bash
 ```
 
@@ -303,21 +303,3 @@ source /opt/ros/humble/setup.bash
 source ~/Robotics_Project/instance-centric-grasping/install/setup.bash
 ros2 service call /icgnet/compute_grasps std_srvs/srv/Trigger
 ```
-
----
-
-## Troubleshooting
-
-| Errore | Causa | Fix |
-|--------|-------|-----|
-| `ModuleNotFoundError: torch` al lancio | PYTHONPATH non settato | Aggiungi la riga PYTHONPATH a `~/.bashrc` (step 11) |
-| `ModuleNotFoundError: MinkowskiEngine` | ME non installato nel venv | `pip install wheels/MinkowskiEngine*.whl` (step 7C) |
-| `ModuleNotFoundError: rclpy` | ROS2 non sourcato | `source /opt/ros/humble/setup.bash` prima del launch |
-| `Cannot find primary config '...'` | hydra.experimental bug | Copia `scripts/patches/icg_net.py` → `~/icg_net/icg_net/icg_net.py` |
-| `nvcc: command not found` | CUDA PATH non in `.bashrc` | Aggiungi le righe PATH al `~/.bashrc` (step 1) |
-| ME compile **Killed** (OOM) | Troppe architetture CUDA | Usa solo quella della tua GPU (es. `TORCH_CUDA_ARCH_LIST="6.1"`) e `MAX_JOBS=2` |
-| `option --editable not recognized` nel colcon build | setuptools >= 64 | Usa `colcon build` senza `--symlink-install` |
-| ME compile error: `nvtx3/nvToolsExt.h` | Bug noto in CUDA 12 | Usa il fork patchato di renezurbruegg, non NVIDIA/MinkowskiEngine |
-| `cuda_home` non trovato durante ME compile | `CUDA_HOME` non settato | `export CUDA_HOME=/usr/local/cuda-12.1` prima del `python setup.py bdist_wheel` |
-| Grasp non pubblicati | `score_threshold` troppo alto | Metti `score_threshold: 0.0` in `icgnet_params.yaml` |
-| `import MinkowskiEngine` OK ma `__file__` è None | Namespace package falso | `~/MinkowskiEngine` è sul sys.path — ME non è installato, esegui step 7C |

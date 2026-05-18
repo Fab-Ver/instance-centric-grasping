@@ -262,6 +262,7 @@ GEMINI.md
 .gemini/
 .anthropic/
 .antigravity/
+.bash.exe.stackdump
 
 # Marimo
 marimo/_static/

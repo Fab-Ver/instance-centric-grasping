@@ -1,4 +1,5 @@
 import copy
+import time
 import threading
 from enum import Enum
 from typing import Any, List, Optional, Tuple, Union
@@ -525,7 +526,10 @@ class MoveIt2:
             return None
 
         while not future.done():
-            rclpy.spin_once(self._node, timeout_sec=1.0)
+            if self._node.executor is not None:
+                time.sleep(0.1)
+            else:
+                rclpy.spin_once(self._node, timeout_sec=1.0)
 
         return self.get_trajectory(
             future,
@@ -640,7 +644,10 @@ class MoveIt2:
                     start_joint_state = self.__joint_state
                     break
                 else:
-                    rclpy.spin_once(self._node, timeout_sec=1.0)
+                    if self._node.executor is not None:
+                        time.sleep(0.1)
+                    else:
+                        rclpy.spin_once(self._node, timeout_sec=1.0)
         except ExternalShutdownException:
             return None
 
@@ -787,7 +794,10 @@ class MoveIt2:
             return False
 
         while self.__is_motion_requested or self.__is_executing:
-            rclpy.spin_once(self._node, timeout_sec=1.0)
+            if self._node.executor is not None:
+                time.sleep(0.1)
+            else:
+                rclpy.spin_once(self._node, timeout_sec=1.0)
 
         return self.motion_suceeded
 
@@ -1229,7 +1239,10 @@ class MoveIt2:
             return None
 
         while not future.done():
-            rclpy.spin_once(self._node, timeout_sec=1.0)
+            if self._node.executor is not None:
+                time.sleep(0.1)
+            else:
+                rclpy.spin_once(self._node, timeout_sec=1.0)
 
         return self.get_compute_fk_result(future, fk_link_names=fk_link_names)
 
@@ -1322,7 +1335,10 @@ class MoveIt2:
             return None
 
         while not future.done():
-            rclpy.spin_once(self._node, timeout_sec=1.0)
+            if self._node.executor is not None:
+                time.sleep(0.1)
+            else:
+                rclpy.spin_once(self._node, timeout_sec=1.0)
 
         return self.get_compute_ik_result(future)
 
@@ -1871,7 +1887,10 @@ class MoveIt2:
         )
 
         while not planning_scene_future.done():
-            rclpy.spin_once(self._node, timeout_sec=1.0)
+            if self._node.executor is not None:
+                time.sleep(0.1)
+            else:
+                rclpy.spin_once(self._node, timeout_sec=1.0)
 
         self.__planning_scene = planning_scene_future.result().scene
         return True
