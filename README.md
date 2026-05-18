@@ -72,7 +72,7 @@ To verify that everything is installed correctly, launch the unified environment
 ```bash
 ros2 launch icgnet_main world.launch.py
 ```
-*You should see Gazebo opening with the Franka Panda robot spawned in front of a table, and RViz showing the PointCloud perfectly aligned with the robot.*
+*You should see Gazebo opening with the Franka Panda robot on a ground plane (no table), and RViz showing the PointCloud perfectly aligned with the robot.*
 
 > **Note for RViz:** When you open RViz for the first time, add a `PointCloud2` display, set the topic to `/camera/rgbd_camera/points` (or `/camera/points`), and change the Fixed Frame to `camera_link`. Then go to `File -> Save Config` to make this automatic for future launches.
 
@@ -160,7 +160,7 @@ Lo spawner seleziona i distrattori in base alle classi riconosciute da ICGNet:
 - `monkey_wrench` (Classe: **Other**)
 
 > **Note:**
-> - Gli oggetti vengono spawnati in posizioni casuali sul tavolo, garantendo una distanza minima per evitare sovrapposizioni.
+> - Gli oggetti vengono spawnati in posizioni casuali sul ground (z=0.05), garantendo una distanza minima per evitare sovrapposizioni.
 > - Se `num_objects > 1`, i distrattori vengono scelti casualmente dalla lista sopra.
 
 ## 🧠 8. Local ICGNet Inference
@@ -321,7 +321,7 @@ Optionally spawn an object (from a second shell, same terminal window):
 ```bash
 source /opt/ros/humble/setup.bash && source install/setup.bash
 ros2 run gazebo_ros spawn_entity.py -entity coke_can \
-  -file src/icgnet_main/models/coke_can/model.sdf -x 0.65 -y 0.0 -z 0.5
+  -file src/icgnet_main/models/coke_can/model.sdf -x 0.65 -y 0.0 -z 0.05
 ```
 
 Or use the unified spawner:
