@@ -7,8 +7,8 @@
     <!-- CAMERA RGB-D: Plugin per pubblicare PointCloud2 -->
     <model name="camera">
       <static>true</static>
-      <!-- Positioned above ground workspace, looking down (pitch=1.0) toward robot (yaw=3.14) -->
-      <pose>1.3 0 1.2 0 1.0 3.14159</pose>
+      <!-- r~0.65m from workspace [0.65,0,0.05], elevation ~30deg from vertical (in ICGNet training range) -->
+      <pose>0.97 0 0.616 0 1.0 3.14159</pose>
       <link name="link">
         <visual name="visual">
           <!-- Un piccolo cubo blu per capire dove si trova fisicamente la telecamera -->

@@ -1,5 +1,6 @@
 import colorsys
 import os
+import struct
 
 import numpy as np
 import rclpy
@@ -10,10 +11,10 @@ from geometry_msgs.msg import Point, PoseArray, Pose
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from scipy.spatial.transform import Rotation
-from sensor_msgs.msg import PointCloud2
+from sensor_msgs.msg import PointCloud2, PointField
+from std_msgs.msg import ColorRGBA, Header
 from std_srvs.srv import Trigger
 from visualization_msgs.msg import Marker, MarkerArray
-from std_msgs.msg import ColorRGBA
 
 try:
     from icgnet_msgs.msg import Grasp, GraspArray
@@ -31,56 +32,107 @@ except ImportError:
     from pointcloud_utils import pointcloud2_to_numpy, process_point_cloud
 
 
-def _score_to_rgb(score: float):
+def _score_to_color(score: float) -> ColorRGBA:
     """Map score [0,1] to HSV color: red=low, green=high."""
-    h = max(0.0, min(1.0, score)) * 0.33   # hue 0° (red) → 120° (green)
+    h = max(0.0, min(1.0, score)) * 0.33
     r, g, b = colorsys.hsv_to_rgb(h, 1.0, 1.0)
-    return float(r), float(g), float(b)
+    return ColorRGBA(r=float(r), g=float(g), b=float(b), a=0.9)
 
 
-def _build_grasp_markers(centers, rot_matrices, scores, frame_id, now):
+def _gripper_points_world(c: np.ndarray, R: np.ndarray, w: float):
     """
-    Build a MarkerArray with one arrow per grasp.
-    Arrow starts at grasp center and points along the approach axis (z-col of rotation matrix).
+    Return the 6 keypoints of the gripper wireframe in world frame.
+    Local frame: y=finger-closing (surface normal), z=approach (toward object).
+    Gripper geometry matches ICGNet's create_our_gripper_marker with
+    center_offset=[0,0,-0.045] and rotations=[0,0,pi/2].
+
+    Segments (each as (start, end) pair):
+      left-finger, right-finger, crossbar, handle
+    """
+    half_w = w / 2.0
+    # Keypoints in local frame (TCP = origin)
+    lf_base = np.array([0.0,  half_w, -0.045])
+    rf_base = np.array([0.0, -half_w, -0.045])
+    lf_tip  = np.array([0.0,  half_w,  0.005])
+    rf_tip  = np.array([0.0, -half_w,  0.005])
+    cb      = np.array([0.0,  0.0,    -0.045])   # crossbar center = handle start
+    handle  = np.array([0.0,  0.0,    -0.115])   # handle end
+
+    def wp(lp):
+        return c + R @ lp
+
+    return [
+        (wp(lf_base), wp(lf_tip)),    # left finger
+        (wp(rf_base), wp(rf_tip)),    # right finger
+        (wp(rf_base), wp(lf_base)),   # crossbar
+        (wp(cb),      wp(handle)),    # handle
+    ]
+
+
+def _build_grasp_markers(centers, rot_matrices, scores, widths, frame_id, now):
+    """
+    Build a MarkerArray with gripper wireframe shapes (LINE_LIST) for each grasp.
+    Each gripper = 4 line segments (2 fingers + crossbar + handle).
     Color encodes score: red=low, green=high.
     """
     ma = MarkerArray()
 
-    # DELETEALL marker clears previous grasps from RViz
     clear = Marker()
     clear.header.frame_id = frame_id
     clear.header.stamp = now
     clear.action = Marker.DELETEALL
     ma.markers.append(clear)
 
-    for i, (c, R, s) in enumerate(zip(centers, rot_matrices, scores)):
-        m = Marker()
-        m.header.frame_id = frame_id
-        m.header.stamp = now
-        m.ns = "icgnet_grasps"
-        m.id = i
-        m.type = Marker.ARROW
-        m.action = Marker.ADD
+    if len(centers) == 0:
+        return ma
 
-        # Direzione di approach = z-axis della matrice di rotazione
-        approach = R[:, 2]
-        length = 0.07  # 7 cm
-        start = Point(x=float(c[0]), y=float(c[1]), z=float(c[2]))
-        end = Point(
-            x=float(c[0] + length * approach[0]),
-            y=float(c[1] + length * approach[1]),
-            z=float(c[2] + length * approach[2]),
-        )
-        m.points = [start, end]
-        m.scale.x = 0.006   # diametro gambo
-        m.scale.y = 0.012   # diametro testa
+    m = Marker()
+    m.header.frame_id = frame_id
+    m.header.stamp = now
+    m.ns = "icgnet_grasps"
+    m.id = 0
+    m.type = Marker.LINE_LIST
+    m.action = Marker.ADD
+    m.scale.x = 0.004   # line width 4mm
+    m.lifetime = rclpy.duration.Duration(seconds=60).to_msg()
 
-        r, g, b = _score_to_rgb(float(s))
-        m.color = ColorRGBA(r=r, g=g, b=b, a=0.85)
-        m.lifetime = rclpy.duration.Duration(seconds=60).to_msg()
-        ma.markers.append(m)
+    for c, R, s, w in zip(centers, rot_matrices, scores, widths):
+        color = _score_to_color(float(s))
+        w_clipped = float(np.clip(w, 0.02, 0.08))
+        segments = _gripper_points_world(c, R, w_clipped)
+        for start, end in segments:
+            m.points.append(Point(x=float(start[0]), y=float(start[1]), z=float(start[2])))
+            m.points.append(Point(x=float(end[0]),   y=float(end[1]),   z=float(end[2])))
+            m.colors.append(color)
+            m.colors.append(color)
 
+    ma.markers.append(m)
     return ma
+
+
+def _numpy_to_pointcloud2(points: np.ndarray, frame_id: str, stamp) -> PointCloud2:
+    """Convert (N, 3) float32 numpy array to a PointCloud2 message."""
+    header = Header()
+    header.frame_id = frame_id
+    header.stamp = stamp
+    fields = [
+        PointField(name='x', offset=0,  datatype=PointField.FLOAT32, count=1),
+        PointField(name='y', offset=4,  datatype=PointField.FLOAT32, count=1),
+        PointField(name='z', offset=8,  datatype=PointField.FLOAT32, count=1),
+    ]
+    point_step = 12
+    data = points.astype(np.float32).tobytes()
+    msg = PointCloud2()
+    msg.header = header
+    msg.height = 1
+    msg.width = len(points)
+    msg.fields = fields
+    msg.is_bigendian = False
+    msg.point_step = point_step
+    msg.row_step = point_step * len(points)
+    msg.data = data
+    msg.is_dense = True
+    return msg
 
 
 class ICGNetGraspNode(Node):
@@ -152,6 +204,9 @@ class ICGNetGraspNode(Node):
         # ── Publisher ────────────────────────────────────────────────────────
         self.grasp_pub = self.create_publisher(PoseArray, '/icgnet/grasps', 10)
         self.marker_pub = self.create_publisher(MarkerArray, '/icgnet/grasps_markers', 10)
+        self.preprocessed_cloud_pub = self.create_publisher(
+            PointCloud2, '/icgnet/preprocessed_cloud', 10
+        )
         self.rich_pub = (
             self.create_publisher(GraspArray, '/icgnet/grasps_rich', 10)
             if _ICGNET_MSGS_AVAILABLE else None
@@ -246,6 +301,10 @@ class ICGNetGraspNode(Node):
 
         self.get_logger().info(f"Preprocessing: {raw_points.shape[0]} → {pts.shape[0]} points")
 
+        # 3b. Publish preprocessed cloud for debugging in RViz
+        cloud_msg = _numpy_to_pointcloud2(pts, self.target_frame, self.get_clock().now().to_msg())
+        self.preprocessed_cloud_pub.publish(cloud_msg)
+
         # 4. ICGNet inference
         output = self.predictor.predict(pts, normals, n_grasps=self.n_grasps)
 
@@ -301,9 +360,9 @@ class ICGNetGraspNode(Node):
             pose_array.poses.append(p)
         self.grasp_pub.publish(pose_array)
 
-        # 8. Pubblica MarkerArray (frecce colorate per score)
+        # 8. Pubblica MarkerArray (gripper wireframes colorati per score)
         marker_array = _build_grasp_markers(
-            centers_f, rot_f, scores_f, self.target_frame, now
+            centers_f, rot_f, scores_f, widths_f, self.target_frame, now
         )
         self.marker_pub.publish(marker_array)
 

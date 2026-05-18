@@ -15,8 +15,9 @@ icgnet_grasp_node:
     # ICGNet requires the cloud in world frame (ground plane at z=0).
     target_frame: "world"
 
-    # Voxel size for downsampling (m). Typical range: 0.005 - 0.02
-    voxel_size: 0.01
+    # Voxel size for pre-inference downsampling (m).
+    # ICGNet paper uses 2mm; 3mm is a safe margin before the internal 5mm requantization.
+    voxel_size: 0.003
 
     # Number of grasps to generate per scene
     n_grasps: 32

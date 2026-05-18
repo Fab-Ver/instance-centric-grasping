@@ -48,11 +48,15 @@ def generate_launch_description():
                 os.path.join(pkg_icgnet_main, 'launch', 'move_group.launch.py')
             ),
         ),
-        # TF: camera position in world frame
+        # TF: camera position in world frame.
+        # Position chosen so the camera is ~0.65m from the workspace center [0.65,0,0.05]
+        # at ~30° elevation from vertical — within ICGNet training range r∈[0.48,0.72]m, θ∈[0°,45°].
+        # RPY is yaw=π, pitch=1.0, roll=0 (arg order: x y z yaw pitch roll parent child).
+        # The optical-frame z-axis in world is [-0.54, 0, -0.84], looking at ~[0.61, 0, 0.05].
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
-            arguments=['1.3', '0', '1.2', '3.14159', '1.0', '0', 'world', 'camera_link'],
+            arguments=['0.97', '0', '0.616', '3.14159', '1.0', '0', 'world', 'camera_link'],
         ),
         # TF: ROS optical frame convention
         Node(

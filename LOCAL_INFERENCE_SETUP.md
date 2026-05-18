@@ -222,8 +222,11 @@ echo "$HOME/icg_net" > .venv/lib/python3.10/site-packages/icg_net.pth
 # e causa un circular import che fa crashare torch)
 python3 -c "import icg_net; print('icg_net OK')"
 
-# Applica il patch a icg_net (fix hydra.experimental + absolute config path)
+# Applica i patch a icg_net:
+# 1. icg_net.py: fix hydra.experimental + absolute config path + semantic class labels
 cp scripts/patches/icg_net.py ~/icg_net/icg_net/icg_net.py
+# 2. grasps.py: fix singularity in batched grasp pose conversion (normals near vertical)
+cp icg_net/icg_net/utils/grasps.py ~/icg_net/icg_net/utils/grasps.py
 
 # Clone di icg_benchmark e download del checkpoint
 [ -d ~/icg_benchmark ] || git clone https://github.com/renezurbruegg/icg_benchmark.git ~/icg_benchmark

@@ -599,10 +599,17 @@ class ICGNetModule(nn.Module):
                 for src, tgt in mapping_dict.items():
                     embeddings.class_labels[lbls == src] = tgt
 
-        labels = embeddings.class_labels
+        # Return per-instance semantic class predictions (shape: n_valid_instances).
+        # embeddings.semseg = pred_logits.argmax(-1) filtered to valid instances,
+        # indexed 0..n-1 matching scene_grasp_poses[4] (instance IDs per grasp).
+        # This replaces class_labels (per-point instance assignment) which is NOT
+        # the semantic class.
+        sem_preds = embeddings.semseg
+        if sem_preds.dim() > 1:
+            sem_preds = sem_preds.squeeze(0)
         return ModelPredOut(
             embedding=embeddings,
-            class_predictions=labels,
+            class_predictions=sem_preds,
             scene_grasp_poses=scene_grasp_poses,
             reconstructions=meshes,
         )
