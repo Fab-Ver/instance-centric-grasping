@@ -27,20 +27,44 @@ def pointcloud2_to_numpy(msg):
         data = data.reshape(-1, floats_per_point)
         return data[:, :3].copy()
 
-def process_point_cloud(points_np, voxel_size=0.01, nb_neighbors=20, std_ratio=2.0,
-                        camera_position=(0.0, 0.0, 0.0)):
+def crop_to_workspace(points_np: np.ndarray, bounds: dict) -> np.ndarray:
     """
-    Preprocessa la point cloud per ICGNet:
-    - Downsampling (Voxel Grid)
-    - Rimozione Outlier
-    - Stima delle Normali orientate verso la camera (richiesto da ICGNet)
+    Removes points outside the workspace bounding box (world frame).
+
+    bounds: dict with keys 'x', 'y', 'z', each a (min, max) tuple.
+    Axes not present in bounds are left uncropped.
+    """
+    mask = np.ones(len(points_np), dtype=bool)
+    for axis, idx in (('x', 0), ('y', 1), ('z', 2)):
+        if axis in bounds:
+            lo, hi = bounds[axis]
+            mask &= (points_np[:, idx] >= lo) & (points_np[:, idx] <= hi)
+    return points_np[mask]
+
+
+def process_point_cloud(points_np, voxel_size=0.01, nb_neighbors=20, std_ratio=2.0,
+                        camera_position=(0.0, 0.0, 0.0), workspace_bounds=None):
+    """
+    Preprocesses the point cloud for ICGNet:
+    - Workspace crop (optional): removes robot body, table surface, out-of-range points
+    - Voxel downsampling
+    - Statistical outlier removal
+    - Normal estimation oriented toward camera (required by ICGNet)
 
     Args:
-        camera_position: posizione della camera nel frame della cloud (tuple/array 3D).
-                         Necessario per orientare le normali correttamente.
+        camera_position: camera position in the cloud frame (3D tuple/array).
+        workspace_bounds: optional dict {'x': (min, max), 'y': (min, max), 'z': (min, max)}
+                          in world frame. Points outside are discarded before downsampling.
     """
     if points_np.shape[0] == 0:
         return np.array([]).reshape(0, 3), np.array([]).reshape(0, 3)
+
+    # Crop to workspace before downsampling — cheaper and removes spurious grasps
+    # on robot body and table surface.
+    if workspace_bounds is not None:
+        points_np = crop_to_workspace(points_np, workspace_bounds)
+        if points_np.shape[0] == 0:
+            return np.array([]).reshape(0, 3), np.array([]).reshape(0, 3)
 
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(points_np)

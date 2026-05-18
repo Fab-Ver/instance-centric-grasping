@@ -16,6 +16,12 @@ from visualization_msgs.msg import Marker, MarkerArray
 from std_msgs.msg import ColorRGBA
 
 try:
+    from icgnet_msgs.msg import Grasp, GraspArray
+    _ICGNET_MSGS_AVAILABLE = True
+except ImportError:
+    _ICGNET_MSGS_AVAILABLE = False
+
+try:
     from .icgnet_inference import ICGNetPredictor
     from .pointcloud_utils import pointcloud2_to_numpy, process_point_cloud
 except ImportError:
@@ -89,6 +95,12 @@ class ICGNetGraspNode(Node):
         self.declare_parameter('voxel_size', 0.01)
         self.declare_parameter('n_grasps', 32)
         self.declare_parameter('score_threshold', 0.0)
+        self.declare_parameter('workspace_x_min', 0.25)
+        self.declare_parameter('workspace_x_max', 1.05)
+        self.declare_parameter('workspace_y_min', -0.50)
+        self.declare_parameter('workspace_y_max', 0.50)
+        self.declare_parameter('workspace_z_min', 0.42)
+        self.declare_parameter('workspace_z_max', 0.90)
 
         config_path = os.path.expanduser(
             self.get_parameter('config_path').get_parameter_value().string_value
@@ -100,6 +112,14 @@ class ICGNetGraspNode(Node):
         self.voxel_size = self.get_parameter('voxel_size').get_parameter_value().double_value
         self.n_grasps = self.get_parameter('n_grasps').get_parameter_value().integer_value
         self.score_threshold = self.get_parameter('score_threshold').get_parameter_value().double_value
+        self.workspace_bounds = {
+            'x': (self.get_parameter('workspace_x_min').get_parameter_value().double_value,
+                  self.get_parameter('workspace_x_max').get_parameter_value().double_value),
+            'y': (self.get_parameter('workspace_y_min').get_parameter_value().double_value,
+                  self.get_parameter('workspace_y_max').get_parameter_value().double_value),
+            'z': (self.get_parameter('workspace_z_min').get_parameter_value().double_value,
+                  self.get_parameter('workspace_z_max').get_parameter_value().double_value),
+        }
 
         # ── Caricamento modello (non-fatale: il nodo resta attivo per debug) ─
         self.predictor = None
@@ -132,6 +152,10 @@ class ICGNetGraspNode(Node):
         # ── Publisher ────────────────────────────────────────────────────────
         self.grasp_pub = self.create_publisher(PoseArray, '/icgnet/grasps', 10)
         self.marker_pub = self.create_publisher(MarkerArray, '/icgnet/grasps_markers', 10)
+        self.rich_pub = (
+            self.create_publisher(GraspArray, '/icgnet/grasps_rich', 10)
+            if _ICGNET_MSGS_AVAILABLE else None
+        )
 
         # ── Servizio ─────────────────────────────────────────────────────────
         self.create_service(Trigger, '/icgnet/compute_grasps', self._compute_grasps_cb)
@@ -210,11 +234,12 @@ class ICGNetGraspNode(Node):
         points_world = (rot_mat @ raw_points.T).T + translation
         camera_pos_world = translation   # posizione camera nel frame world
 
-        # 3. Preprocessing
+        # 3. Preprocessing (crop → downsample → outlier removal → normals)
         pts, normals = process_point_cloud(
             points_world,
             voxel_size=self.voxel_size,
             camera_position=camera_pos_world,
+            workspace_bounds=self.workspace_bounds,
         )
         if pts.shape[0] < 50:
             raise RuntimeError(f"Punti insufficienti dopo preprocessing: {pts.shape[0]}")
@@ -232,7 +257,20 @@ class ICGNetGraspNode(Node):
         widths       = output.scene_grasp_poses[3].cpu().numpy()
         inst_ids     = output.scene_grasp_poses[4].cpu().numpy()
 
-        
+        # class_predictions has shape (N_points,) — per-point semantic labels.
+        # We index it with inst_id as a best-effort mapping: works when
+        # class_predictions is actually (N_instance_queries,). If the shapes
+        # don't match, we fall back to class 6 (other) and log a warning.
+        try:
+            cls_arr = output.class_predictions.cpu().numpy()
+            sem_class_raw = np.array(
+                [int(cls_arr[iid]) if iid < len(cls_arr) else 6 for iid in inst_ids],
+                dtype=np.int32,
+            )
+        except Exception as e:
+            self.get_logger().warn(f"Could not extract semantic_class: {e} — defaulting to 6 (other)")
+            sem_class_raw = np.full(len(inst_ids), 6, dtype=np.int32)
+
         n_total = len(centers)
 
         # 6. Filtra per score
@@ -242,7 +280,7 @@ class ICGNetGraspNode(Node):
         scores_f  = scores[mask]
         widths_f  = widths[mask]
         inst_f    = inst_ids[mask]
-        #cls_f     = cls[mask] if len(cls) >= len(centers) else np.zeros(mask.sum(), dtype=int)
+        cls_f     = sem_class_raw[mask]
 
         now = self.get_clock().now().to_msg()
 
@@ -268,6 +306,21 @@ class ICGNetGraspNode(Node):
             centers_f, rot_f, scores_f, self.target_frame, now
         )
         self.marker_pub.publish(marker_array)
+
+        # 9. Pubblica GraspArray con tutti i metadati (usato da grasp_executor)
+        if self.rich_pub is not None:
+            ga = GraspArray()
+            ga.header.frame_id = self.target_frame
+            ga.header.stamp = now
+            for i in range(len(centers_f)):
+                g = Grasp()
+                g.pose = pose_array.poses[i]
+                g.score = float(scores_f[i])
+                g.width = float(widths_f[i])
+                g.instance_id = int(inst_f[i])
+                g.semantic_class = int(cls_f[i])
+                ga.grasps.append(g)
+            self.rich_pub.publish(ga)
 
         return n_total, mask.sum()
 

@@ -27,3 +27,17 @@ icgnet_grasp_node:
     # Soglia minima sullo score ICGNet [0.0 - 1.0].
     # 0.0 = pubblica tutto; aumentare (es. 0.5) per ridurre i falsi positivi.
     score_threshold: 0.0
+
+    # Workspace bounding box (world frame, metres).
+    # Points outside are removed BEFORE passing to ICGNet — eliminates spurious
+    # grasps on the robot body and table surface.
+    # Table top is at z=0.40 (pose z=0.20 + half-height 0.20). z_min=0.42 adds
+    # a 2 cm margin so the table surface itself is excluded.
+    # x range covers the table (centre 0.65, half-width 0.40) but excludes the
+    # robot base near the world origin.
+    workspace_x_min: 0.25
+    workspace_x_max: 1.05
+    workspace_y_min: -0.50
+    workspace_y_max:  0.50
+    workspace_z_min: 0.42
+    workspace_z_max: 0.90
