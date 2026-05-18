@@ -61,21 +61,28 @@ rosdep update
 ```
 
 ### 4. Setup and Build the Workspace
-Assuming you have cloned this repository, follow these steps to build the workspace. Note that the necessary robot packages (`franka_description`, `panda_ros2_gazebo`) and our custom package (`icgnet_main`) are already included in the `src` folder.
+Assuming you have cloned this repository, follow these steps to build the workspace. Note that the necessary robot packages (`franka_description`, `panda_ros2_gazebo`) and our custom packages (`icgnet_main`, `icgnet_msgs`) are already included in the `src` folder.
 
 ```bash
 # 1. Enter the workspace
 cd ~/instance-centric-grasping
 
-# 2. Install ROS package dependencies automatically
+# 2. Source ROS2 (required before every colcon build)
+source /opt/ros/humble/setup.bash
+
+# 3. Install ROS package dependencies automatically
 rosdep install --from-paths src --ignore-src -y
 
-# 3. Build the workspace
-colcon build --symlink-install
+# 4. Build icgnet_msgs FIRST — other packages depend on it
+colcon build --symlink-install --packages-select icgnet_msgs
+source install/setup.bash
 
-# 4. Source the environment
+# 5. Build the rest of the workspace
+colcon build --symlink-install
 source install/setup.bash
 ```
+
+> **Note (GPU machine only):** Do NOT use `--symlink-install` when building on the machine where `icg_net` is installed. Use `colcon build --packages-select icgnet_msgs icgnet_main panda_ros2_gazebo` instead. The `--symlink-install` flag conflicts with editable installs under setuptools ≥ 64.
 
 > **Tip:** To automatically load the workspace in every new terminal, add this to your `~/.bashrc`:
 > `echo "source ~/instance-centric-grasping/install/setup.bash" >> ~/.bashrc`
@@ -217,12 +224,13 @@ RViz opens automatically with the ICGNet grasp displays pre-loaded (`ICGNet Gras
 ```bash
 source /opt/ros/humble/setup.bash
 source install/setup.bash
-export PYTHONPATH=~/instance-centric-grasping/.venv/lib/python3.10/site-packages:$PYTHONPATH
+# Use $(pwd) to get the correct absolute path regardless of where the repo is cloned
+export PYTHONPATH=$(pwd)/.venv/lib/python3.10/site-packages:$PYTHONPATH
 ros2 launch icgnet_main icgnet_inference.launch.py
 # Wait for: "ICGNet caricato correttamente." (model loading takes ~10-20s on GPU)
 ```
 
-> **Note:** `source .venv/bin/activate` is NOT sufficient — the installed executable has a hardcoded shebang pointing to the system Python. `PYTHONPATH` is the correct mechanism to expose the venv's ML packages to the system Python 3.10.
+> **Note:** `source .venv/bin/activate` is NOT sufficient — the installed executable has a hardcoded shebang pointing to the system Python. `PYTHONPATH` is the correct mechanism to expose the venv's ML packages to the system Python 3.10. Run `export PYTHONPATH=...` from inside the repo root (where `.venv/` is located).
 
 **Terminal 3 — Trigger a Prediction:**
 ```bash
@@ -252,17 +260,27 @@ Gazebo Camera
   └─ /camera/rgbd_camera/points  (PointCloud2, BEST_EFFORT)
        │
        ▼
-  grasp_service_node
+  grasp_service_node  (icgnet_inference.launch.py)
   ├─ Transforms cloud: camera_link_optical → world (via tf2)
   ├─ Preprocesses: voxel downsample + normal estimation
   ├─ Runs ICGNet inference
   └─ Publishes:
        ├─ /icgnet/grasps          (PoseArray, frame=world)
-       └─ /icgnet/grasps_markers  (MarkerArray, arrows colored by score)
+       ├─ /icgnet/grasps_markers  (MarkerArray, arrows colored by score — RViz)
+       └─ /icgnet/grasps_rich     (GraspArray: pose+score+width+instance_id+semantic_class)
+                                        │
+                                        ▼
+                              grasp_executor  (grasp_execution.launch.py)
+                              ├─ Filters: score ≥ threshold, width ≤ 0.08m, workspace bounds, target class
+                              ├─ Sorts by score (best first)
+                              └─ For each grasp:
+                                   open gripper → pre-grasp (+10cm) → approach → close → lift (+25cm)
+                                        │
+                                        ▼
+                                   MoveIt2 / pymoveit2
 ```
 
-Grasp poses are published in the **`world` frame** (table at z=0, as required by ICGNet).
-The future `grasp_executor` will only need to transform `world → panda_link0` before sending to MoveIt2.
+Grasp poses are published in the **`world` frame** (table at z=0, as required by ICGNet). The `grasp_executor` does not need an additional TF transform — `world` and `panda_link0` are coincident in Gazebo.
 
 ### F. Troubleshooting
 
@@ -270,9 +288,157 @@ The future `grasp_executor` will only need to transform `world → panda_link0` 
 |---------|-------------|-----|
 | `"Nessuna pointcloud ricevuta"` | Gazebo not running or wrong topic | Check `ros2 topic hz /camera/rgbd_camera/points` |
 | `"TF lookup fallito"` | `world.launch.py` not running | Launch simulation first |
-| `"ICGNet non inizializzato"` | Wrong paths in YAML | Check `config_path` and `icgnet_repo_path` |
-| `ModuleNotFoundError: torch` at launch | PYTHONPATH not set | Add `export PYTHONPATH=~/.../venv/lib/python3.10/site-packages:$PYTHONPATH` before launch |
+| `"ICGNet non inizializzato"` | Wrong paths in YAML | Check `config_path` and `icgnet_repo_path` in `icgnet_params.yaml` |
+| `ModuleNotFoundError: torch` at launch | PYTHONPATH not set correctly | Run `export PYTHONPATH=$(pwd)/.venv/lib/python3.10/site-packages:$PYTHONPATH` from repo root |
+| `ModuleNotFoundError: torch` despite PYTHONPATH | Wrong working directory when exporting | Make sure you are in the repo root (`cd ~/…/instance-centric-grasping`) before exporting |
 | `Cannot find primary config '...'` | hydra.experimental bug | Copy `scripts/patches/icg_net.py` → `~/icg_net/icg_net/icg_net.py` |
 | ME compile killed (OOM) | Too many CUDA architectures | Set `TORCH_CUDA_ARCH_LIST` to your GPU only (e.g. `"6.1"`) and `MAX_JOBS=2` |
 | Arrows appear at wrong location | Fixed Frame mismatch | Set RViz Fixed Frame to `world` |
-| No arrows after trigger | All grasps below threshold | Set `score_threshold: 0.0` in YAML |
+| No arrows after trigger | All grasps below threshold | Set `score_threshold: 0.0` in `icgnet_params.yaml` |
+| `No module named 'icgnet_msgs'` at executor launch | `icgnet_msgs` not built or not sourced | `colcon build --packages-select icgnet_msgs && source install/setup.bash` |
+| `Service '/icgnet/compute_grasps' not available` | `icgnet_inference.launch.py` not running | Start Terminal 3 of section 9 first |
+| `No grasps after filtering` | All grasps outside workspace or below score | Lower `default_min_score` in `grasp_executor_params.yaml` or check workspace bounds |
+| Arm doesn't move on `execute_grasp` call | MoveIt2 not ready or IK failure | Check `ros2 action list | grep follow`; try `target='any'` with `min_score: 0.0` |
+
+---
+
+## 🤖 9. Grasp Execution (Full Pipeline)
+
+This section runs the complete pipeline: ICGNet predicts grasps → `grasp_executor` filters them → MoveIt2 moves the arm to pick up the object.
+
+> ⚠️ **Status:** `grasp_executor` and `icgnet_msgs` are implemented but **not yet tested end-to-end**. Expect iteration.
+
+### Prerequisites — Build (once after cloning or after any change)
+
+```bash
+cd ~/instance-centric-grasping
+source /opt/ros/humble/setup.bash
+
+# Build icgnet_msgs first (ament_cmake — other packages depend on it)
+colcon build --packages-select icgnet_msgs
+source install/setup.bash
+
+# Build icgnet_main (NO --symlink-install on the GPU machine)
+colcon build --packages-select icgnet_main
+source install/setup.bash
+
+# Verify interfaces were generated correctly
+ros2 interface show icgnet_msgs/msg/Grasp
+ros2 interface show icgnet_msgs/srv/ExecuteGrasp
+```
+
+### Terminal 1 — Simulation (Gazebo + MoveIt2 + RViz)
+
+```bash
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 launch icgnet_main world.launch.py
+# Wait until you see:
+#   [move_group]: MoveGroup context using planning plugin ...
+#   [move_group]: All is well! Everyone is happy!
+```
+
+Optionally spawn an object (from a second shell, same terminal window):
+```bash
+source /opt/ros/humble/setup.bash && source install/setup.bash
+ros2 run gazebo_ros spawn_entity.py -entity coke_can \
+  -file src/icgnet_main/models/coke_can/model.sdf -x 0.65 -y 0.0 -z 0.5
+```
+
+Or use the unified spawner:
+```bash
+ros2 launch icgnet_main world.launch.py target_type:=coke_can num_objects:=1
+```
+
+### Terminal 2 — Verify MoveIt2 is ready
+
+```bash
+source /opt/ros/humble/setup.bash && source install/setup.bash
+
+# Both controllers must be active before proceeding
+ros2 control list_controllers
+# panda_arm_controller  → active
+# panda_hand_controller → active
+
+ros2 action list | grep follow
+# /panda_arm_controller/follow_joint_trajectory
+# /panda_hand_controller/follow_joint_trajectory
+```
+
+### Terminal 3 — ICGNet Inference Node (GPU machine)
+
+```bash
+cd ~/instance-centric-grasping    # must be in repo root for $(pwd) to resolve correctly
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+export PYTHONPATH=$(pwd)/.venv/lib/python3.10/site-packages:$PYTHONPATH
+ros2 launch icgnet_main icgnet_inference.launch.py
+# Wait for: "[icgnet_grasp_node]: ICGNet caricato correttamente."
+# Model loading takes ~10-20s on GPU.
+```
+
+### Terminal 4 — Grasp Executor
+
+```bash
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 launch icgnet_main grasp_execution.launch.py
+# Wait for: "[grasp_executor_node]: GraspExecutorNode ready."
+```
+
+### Terminal 5 — Trigger a Grasp
+
+```bash
+source /opt/ros/humble/setup.bash && source install/setup.bash
+
+# Baseline: pick the best grasp regardless of object type
+ros2 service call /icgnet/execute_grasp icgnet_msgs/srv/ExecuteGrasp \
+  "{target: 'any', min_score: 0.4, max_attempts: 5}"
+
+# Target-driven: pick only a can
+ros2 service call /icgnet/execute_grasp icgnet_msgs/srv/ExecuteGrasp \
+  "{target: 'can', min_score: 0.4, max_attempts: 5}"
+
+# Target by instance ID (useful for multi-object scenes)
+ros2 service call /icgnet/execute_grasp icgnet_msgs/srv/ExecuteGrasp \
+  "{target: 'instance_0', min_score: 0.3, max_attempts: 3}"
+```
+
+**Expected response on success:**
+```
+success: True
+grasps_attempted: 2
+message: Grasp succeeded on attempt 2
+```
+
+**Expected response when no matching object:**
+```
+success: False
+grasps_attempted: 0
+message: "No grasps after filtering: target='mug' min_score=0.40"
+```
+
+### Supported target values
+
+| `target` value | Meaning |
+|---|---|
+| `any` | Best grasp regardless of class |
+| `mug` | Semantic class 0 |
+| `box` | Semantic class 1 |
+| `can` | Semantic class 2 |
+| `bottle` | Semantic class 3 |
+| `cylindric` | Semantic class 4 |
+| `ball` | Semantic class 5 |
+| `other` | Semantic class 6 |
+| `instance_N` | Specific instance ID (e.g. `instance_0`) |
+
+### Tunable parameters
+
+Edit `src/icgnet_main/config/grasp_executor_params.yaml` before rebuilding:
+
+| Parameter | Default | Effect |
+|---|---|---|
+| `default_min_score` | `0.4` | Lower if too many grasps are discarded |
+| `approach_offset` | `0.10` m | Distance of pre-grasp from object. Increase if robot hits object on approach |
+| `lift_height` | `0.25` m | How far the arm rises after grasping |
+| `workspace_x/y/z_min/max` | see yaml | Franka reachable workspace in world frame. Widen if valid grasps are discarded |

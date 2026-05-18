@@ -37,6 +37,7 @@ setup(
             'scene_capture = icgnet_main.scene_capture:main',
             'spawn_object = icgnet_main.spawn_object:main',
             'spawn_one_entity = icgnet_main.spawn_one_entity:main',
+            'grasp_executor = icgnet_main.grasp_executor:main',
         ],
     },
 )
