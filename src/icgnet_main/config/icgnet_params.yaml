@@ -29,15 +29,12 @@ icgnet_grasp_node:
     score_threshold: 0.0
 
     # Workspace bounding box (world frame, metres).
-    # Points outside are removed BEFORE passing to ICGNet — eliminates spurious
-    # grasps on the robot body and table surface.
-    # Table top is at z=0.40 (pose z=0.20 + half-height 0.20). z_min=0.42 adds
-    # a 2 cm margin so the table surface itself is excluded.
-    # x range covers the table (centre 0.65, half-width 0.40) but excludes the
-    # robot base near the world origin.
+    # Points outside are removed BEFORE passing to ICGNet. Objects spawn on the
+    # ground (z~0.05m); z_min=0.01 keeps object points while excluding the
+    # ground plane itself. Robot body (x<0.25) is excluded by x_min.
     workspace_x_min: 0.25
     workspace_x_max: 1.05
     workspace_y_min: -0.50
     workspace_y_max:  0.50
-    workspace_z_min: 0.42
-    workspace_z_max: 0.90
+    workspace_z_min: 0.01
+    workspace_z_max: 0.60
