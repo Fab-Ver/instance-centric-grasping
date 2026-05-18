@@ -22,7 +22,7 @@ sudo reboot
 
 ## 1. CUDA Toolkit 12.1
 
-Se `nvcc --version` mostra già CUDA 12.x, salta questa sezione.
+Se `nvcc --version` mostra già CUDA 12.x, salta l'installazione ma esegui comunque il blocco `.bashrc`.
 
 ```bash
 # Aggiungi la repo NVIDIA
@@ -30,13 +30,17 @@ wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/
 sudo dpkg -i cuda-keyring_1.1-1_all.deb
 sudo apt-get update
 sudo apt-get install -y cuda-toolkit-12-1
+```
 
-# Aggiungi al PATH (metti anche in ~/.bashrc per renderlo permanente)
-export PATH=/usr/local/cuda-12.1/bin:$PATH
-export CUDA_HOME=/usr/local/cuda-12.1
+**PATH permanente** — senza questo, `nvcc` sparisce ad ogni nuova sessione:
+
+```bash
+echo 'export PATH=/usr/local/cuda-12.1/bin:$PATH' >> ~/.bashrc
+echo 'export CUDA_HOME=/usr/local/cuda-12.1' >> ~/.bashrc
+source ~/.bashrc
 
 # Verifica
-nvcc --version
+nvcc --version   # deve mostrare release 12.1
 ```
 
 ---
@@ -126,40 +130,74 @@ pip install \
 
 La versione ufficiale NVIDIA non supporta PyTorch 2.x. Usa il fork di renezurbruegg.
 
-**IMPORTANTE — trova prima la compute capability della tua GPU:**
+> **Se esiste già `wheels/MinkowskiEngine*.whl` nella root del repo, salta al paragrafo
+> "Reinstall da wheel" in fondo a questa sezione — non devi ricompilare.**
+
+### 7A. Prima compilazione (~20-30 min, richiede GPU + nvcc)
+
+**Trova la compute capability della tua GPU:**
 ```bash
 nvidia-smi --query-gpu=name --format=csv,noheader
 ```
 
 | GPU | `TORCH_CUDA_ARCH_LIST` |
 |-----|------------------------|
-| GTX 1080 / 1070 / 1060 | `6.1` |
-| RTX 2080 / 2070 / 2060 | `7.5` |
-| RTX 3090 / 3080 / 3070 / 3060 | `8.6` |
-| RTX 4090 / 4080 / 4070 | `8.9` |
+| GTX 1050 Ti / 1060 / 1070 / 1080 | `6.1` |
+| RTX 2060 / 2070 / 2080 | `7.5` |
+| RTX 3060 / 3070 / 3080 / 3090 | `8.6` |
+| RTX 4070 / 4080 / 4090 | `8.9` |
 | A100 | `8.0` |
 | V100 | `7.0` |
 
-Compilare per tutte le architetture insieme (`6.0 6.1 6.2 7.0 ...`) causa OOM e il processo
-viene killato. Usa **solo** l'architettura della tua GPU.
+Compilare per tutte le architetture insieme causa OOM. Usa **solo** l'architettura della tua GPU.
 
 ```bash
-# Sostituisci 8.6 con il valore della tua GPU dalla tabella sopra
-export TORCH_CUDA_ARCH_LIST="8.6"
+# Sostituisci 6.1 con il valore della tua GPU dalla tabella sopra
+export TORCH_CUDA_ARCH_LIST="6.1"
 export CUDA_HOME=/usr/local/cuda-12.1
 export MAX_JOBS=2   # limita i job paralleli per evitare OOM
 
-# Clona il fork patchato
-git clone https://github.com/renezurbruegg/MinkowskiEngine.git ~/MinkowskiEngine
+# Clona il fork patchato (se non già presente)
+[ -d ~/MinkowskiEngine ] || git clone https://github.com/renezurbruegg/MinkowskiEngine.git ~/MinkowskiEngine
 cd ~/MinkowskiEngine
 
-# Compila e installa (~15-30 min)
-python setup.py install --force_cuda --blas=openblas --cuda_home=$CUDA_HOME
+# Compila e crea il wheel (~20-30 min)
+python3 setup.py bdist_wheel --force_cuda --blas=openblas --cuda_home=$CUDA_HOME
+```
 
-cd ~/instance-centric-grasping
+### 7B. Salva il wheel nel repo (esegui subito dopo la compilazione)
+
+```bash
+cd ~/MinkowskiEngine
+WHL=$(ls dist/minkowskiengine*.whl | head -1)
+echo "Wheel creato: $WHL"
+
+# Salva nella cartella wheels/ del repo — da qui in poi non si ricompila mai più
+mkdir -p ~/Robotics_Project/instance-centric-grasping/wheels
+cp "$WHL" ~/Robotics_Project/instance-centric-grasping/wheels/
+
+cd ~/Robotics_Project/instance-centric-grasping
+```
+
+### 7C. Installa nel venv (sia prima volta che reinstall)
+
+```bash
+# venv già attivo
+pip install wheels/minkowskiengine*.whl
 
 # Verifica
-python3 -c "import MinkowskiEngine; print('ME OK:', MinkowskiEngine.__version__)"
+python3 -c "import MinkowskiEngine as ME; print('ME OK')"
+```
+
+### Reinstall da wheel (venv ricreato, nuova macchina, nuovo membro del team)
+
+> Questo è il percorso normale dopo la prima compilazione — secondi, senza GPU.
+
+```bash
+source ~/Robotics_Project/instance-centric-grasping/.venv/bin/activate
+cd ~/Robotics_Project/instance-centric-grasping
+pip install wheels/minkowskiengine*.whl
+python3 -c "import MinkowskiEngine as ME; print('ME OK')"
 ```
 
 ---
@@ -167,32 +205,34 @@ python3 -c "import MinkowskiEngine; print('ME OK:', MinkowskiEngine.__version__)
 ## 8. icg\_net — repo, pointnet2 e checkpoint
 
 ```bash
-# Clone del repo icg_net
-git clone https://github.com/renezurbruegg/icg_net.git ~/icg_net
+# Clone del repo icg_net (se non già presente)
+[ -d ~/icg_net ] || git clone https://github.com/renezurbruegg/icg_net.git ~/icg_net
 
 # Compila l'estensione C++ pointnet2 (richiesta da icg_net)
-cd ~/icg_net/third_party/pointnet2
+cd ~/icg_net/icg_net/third_party/pointnet2
 python setup.py install
-cd ~/instance-centric-grasping
+cd ~/Robotics_Project/instance-centric-grasping
 
-# Installa icg_net. pip install -e fallisce con setuptools >= 67.
-# Opzione 1 — setup.py develop:
-cd ~/icg_net && python setup.py develop && cd ~/instance-centric-grasping
-# Opzione 2 — se fallisce, .pth file (garantito):
-#   echo "$HOME/icg_net" > ~/instance-centric-grasping/.venv/lib/python3.10/site-packages/icg_net.pth
-#   (trova il path corretto con: python3 -c "import site; print(site.getsitepackages()[0])")
+# Installa icg_net tramite .pth file (metodo unico funzionante:
+# icg_net usa pyproject.toml senza setup.py, e pip install -e fallisce con setuptools >= 67)
+echo "$HOME/icg_net" > .venv/lib/python3.10/site-packages/icg_net.pth
 
+# Verifica — IMPORTANTE: esegui SEMPRE da ~/Robotics_Project/instance-centric-grasping,
+# MAI da dentro ~/icg_net/* (la sottocartella typing/ locale ombreggia la stdlib
+# e causa un circular import che fa crashare torch)
 python3 -c "import icg_net; print('icg_net OK')"
 
 # Applica il patch a icg_net (fix hydra.experimental + absolute config path)
-cp ~/instance-centric-grasping/scripts/patches/icg_net.py ~/icg_net/icg_net/icg_net.py
+cp scripts/patches/icg_net.py ~/icg_net/icg_net/icg_net.py
 
 # Clone di icg_benchmark e download del checkpoint
-git clone https://github.com/renezurbruegg/icg_benchmark.git ~/icg_benchmark
+[ -d ~/icg_benchmark ] || git clone https://github.com/renezurbruegg/icg_benchmark.git ~/icg_benchmark
 cd ~/icg_benchmark
 python scripts/download_data.py
 # → checkpoint salvato in: ~/icg_benchmark/data/icgnet/51--0.656/checkpoint.ckpt
-cd ~/instance-centric-grasping
+cd ~/Robotics_Project/instance-centric-grasping
+
+# Already saved locally in icgnet_weights
 ```
 
 ---
@@ -207,7 +247,7 @@ setuptools >= 64. Usa il build standard:
 
 ```bash
 source /opt/ros/humble/setup.bash
-cd ~/instance-centric-grasping
+cd ~/Robotics_Project/instance-centric-grasping
 colcon build --packages-select icgnet_main panda_ros2_gazebo
 source install/setup.bash
 ```
@@ -224,7 +264,7 @@ Imposta i due path:
 ```yaml
 icgnet_grasp_node:
   ros__parameters:
-    config_path:      "~/icg_benchmark/data/icgnet/51--0.656/config.yaml"
+    config_path:      "~/icg_benchmark/data/icgnet/51--0.656/config.yaml"  # TODO: fix with local path
     icgnet_repo_path: "~/icg_net"
 ```
 
@@ -235,25 +275,32 @@ icgnet_grasp_node:
 Gli eseguibili colcon usano `#!/usr/bin/python3` hardcoded — `source .venv/bin/activate`
 non ha effetto su di loro. Usa **PYTHONPATH** per esporre le ML deps al Python di sistema.
 
+**PYTHONPATH permanente** — aggiungilo a `~/.bashrc` una volta sola per non doverlo
+riesportare ogni sessione:
+
+```bash
+echo 'export PYTHONPATH=~/Robotics_Project/instance-centric-grasping/.venv/lib/python3.10/site-packages:$PYTHONPATH' >> ~/.bashrc
+source ~/.bashrc
+```
+
 **Terminale 1 — Simulazione:**
 ```bash
 source /opt/ros/humble/setup.bash
-source ~/instance-centric-grasping/install/setup.bash
+source ~/Robotics_Project/instance-centric-grasping/install/setup.bash
 ros2 launch icgnet_main world.launch.py
 ```
 
 **Terminale 2 — Nodo ICGNet (attendi "ICGNet caricato correttamente.", ~10-20s):**
 ```bash
 source /opt/ros/humble/setup.bash
-source ~/instance-centric-grasping/install/setup.bash
-export PYTHONPATH=~/instance-centric-grasping/.venv/lib/python3.10/site-packages:$PYTHONPATH
+source ~/Robotics_Project/instance-centric-grasping/install/setup.bash
 ros2 launch icgnet_main icgnet_inference.launch.py
 ```
 
 **Terminale 3 — Trigger predizione:**
 ```bash
 source /opt/ros/humble/setup.bash
-source ~/instance-centric-grasping/install/setup.bash
+source ~/Robotics_Project/instance-centric-grasping/install/setup.bash
 ros2 service call /icgnet/compute_grasps std_srvs/srv/Trigger
 ```
 
@@ -263,11 +310,14 @@ ros2 service call /icgnet/compute_grasps std_srvs/srv/Trigger
 
 | Errore | Causa | Fix |
 |--------|-------|-----|
-| `ModuleNotFoundError: torch` al lancio | PYTHONPATH non settato | Aggiungi `export PYTHONPATH=.../.venv/lib/python3.10/site-packages:$PYTHONPATH` prima del launch |
+| `ModuleNotFoundError: torch` al lancio | PYTHONPATH non settato | Aggiungi la riga PYTHONPATH a `~/.bashrc` (step 11) |
+| `ModuleNotFoundError: MinkowskiEngine` | ME non installato nel venv | `pip install wheels/MinkowskiEngine*.whl` (step 7C) |
 | `ModuleNotFoundError: rclpy` | ROS2 non sourcato | `source /opt/ros/humble/setup.bash` prima del launch |
 | `Cannot find primary config '...'` | hydra.experimental bug | Copia `scripts/patches/icg_net.py` → `~/icg_net/icg_net/icg_net.py` |
-| ME compile **Killed** (OOM) | Troppo architetture CUDA | Usa solo quella della tua GPU (es. `TORCH_CUDA_ARCH_LIST="6.1"`) e `MAX_JOBS=2` |
+| `nvcc: command not found` | CUDA PATH non in `.bashrc` | Aggiungi le righe PATH al `~/.bashrc` (step 1) |
+| ME compile **Killed** (OOM) | Troppe architetture CUDA | Usa solo quella della tua GPU (es. `TORCH_CUDA_ARCH_LIST="6.1"`) e `MAX_JOBS=2` |
 | `option --editable not recognized` nel colcon build | setuptools >= 64 | Usa `colcon build` senza `--symlink-install` |
 | ME compile error: `nvtx3/nvToolsExt.h` | Bug noto in CUDA 12 | Usa il fork patchato di renezurbruegg, non NVIDIA/MinkowskiEngine |
-| `cuda_home` non trovato durante ME compile | `CUDA_HOME` non settato | `export CUDA_HOME=/usr/local/cuda-12.1` prima del `python setup.py install` |
+| `cuda_home` non trovato durante ME compile | `CUDA_HOME` non settato | `export CUDA_HOME=/usr/local/cuda-12.1` prima del `python setup.py bdist_wheel` |
 | Grasp non pubblicati | `score_threshold` troppo alto | Metti `score_threshold: 0.0` in `icgnet_params.yaml` |
+| `import MinkowskiEngine` OK ma `__file__` è None | Namespace package falso | `~/MinkowskiEngine` è sul sys.path — ME non è installato, esegui step 7C |
