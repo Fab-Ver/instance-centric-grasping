@@ -113,13 +113,8 @@ class GraspExecutorNode(Node):
             return res
 
         future = self._compute_client.call_async(Trigger.Request())
-        deadline = time.time() + 15.0
-        while not future.done() and time.time() < deadline:
+        while not future.done():
             time.sleep(0.05)
-        if not future.done():
-            res.success = False
-            res.message = "ICGNet inference timed out"
-            return res
         if not future.result().success:
             res.success = False
             res.message = f"ICGNet inference failed: {future.result().message}"
