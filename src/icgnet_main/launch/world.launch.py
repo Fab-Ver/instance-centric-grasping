@@ -15,7 +15,7 @@ def generate_launch_description():
     mode = LaunchConfiguration('mode', default='offline')
 
     # Percorso del tuo file .world
-    world_path = os.path.join(pkg_icgnet_main, 'worlds', 'icgnet_table.world')
+    world_path = os.path.join(pkg_icgnet_main, 'worlds', 'icgnet_world.world')
     
     # Percorso dei modelli locali
     models_path = os.path.join(pkg_icgnet_main, 'models')
@@ -56,7 +56,7 @@ def generate_launch_description():
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
-            arguments=['1.3', '0', '1.2', '3.14159', '0.8', '0', 'world', 'camera_link'],
+            arguments=['1.3', '0', '1.2', '3.14159', '1.0', '0', 'world', 'camera_link'],
         ),
         # TF: ROS optical frame convention
         Node(

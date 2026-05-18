@@ -80,7 +80,7 @@ class ObjectSpawner(Node):
         cmd = [
             'ros2', 'run', 'gazebo_ros', 'spawn_entity.py',
             '-entity', entity_name,
-            '-x', f'{x:.3f}', '-y', f'{y:.3f}', '-z', '0.42',
+            '-x', f'{x:.3f}', '-y', f'{y:.3f}', '-z', '0.05',
             '-Y', f'{yaw:.3f}'
         ]
 
