@@ -61,7 +61,7 @@ sudo apt-get install -y \
 ## 3. Virtual environment Python 3.10
 
 Usiamo un venv Python 3.10 (il Python di sistema su Ubuntu 22.04).
-**Non usare `uv sync`** su questa macchina: quello è per il path Kaggle (Python 3.12).
+**Non usare `uv sync`**: questo progetto usa pip + Python 3.10 per l'inferenza locale (non uv/Python 3.12).
 
 ```bash
 cd ~/instance-centric-grasping
