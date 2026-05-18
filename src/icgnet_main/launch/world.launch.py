@@ -14,14 +14,10 @@ def generate_launch_description():
     num_objects = LaunchConfiguration('num_objects', default='1')
     mode = LaunchConfiguration('mode', default='offline')
 
-    # Percorso del tuo file .world
     world_path = os.path.join(pkg_icgnet_main, 'worlds', 'icgnet_world.world')
-    
-    # Percorso dei modelli locali
     models_path = os.path.join(pkg_icgnet_main, 'models')
-    
-    # Aggiungiamo i modelli locali al path di Gazebo
-    # Nota: usiamo append per non cancellare i modelli standard di Gazebo
+
+    # Append local models without overwriting standard Gazebo model database
     set_gazebo_model_path = SetEnvironmentVariable(
         name='GAZEBO_MODEL_PATH',
         value=[os.environ.get('GAZEBO_MODEL_PATH', ''), ':', models_path]

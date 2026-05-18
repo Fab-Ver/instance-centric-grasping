@@ -32,7 +32,7 @@ except ImportError:
 
 
 def _score_to_rgb(score: float):
-    """Mappa score [0,1] su colore HSV: rosso=basso, verde=alto."""
+    """Map score [0,1] to HSV color: red=low, green=high."""
     h = max(0.0, min(1.0, score)) * 0.33   # hue 0° (red) → 120° (green)
     r, g, b = colorsys.hsv_to_rgb(h, 1.0, 1.0)
     return float(r), float(g), float(b)
@@ -40,13 +40,13 @@ def _score_to_rgb(score: float):
 
 def _build_grasp_markers(centers, rot_matrices, scores, frame_id, now):
     """
-    Costruisce un MarkerArray con una freccia per ogni grasp.
-    La freccia parte dal centro del grasp e punta lungo l'asse di approach (z della rotazione).
-    Il colore è mappato sullo score: rosso=basso, verde=alto.
+    Build a MarkerArray with one arrow per grasp.
+    Arrow starts at grasp center and points along the approach axis (z-col of rotation matrix).
+    Color encodes score: red=low, green=high.
     """
     ma = MarkerArray()
 
-    # Marker DELETE_ALL per ripulire i grasp precedenti
+    # DELETEALL marker clears previous grasps from RViz
     clear = Marker()
     clear.header.frame_id = frame_id
     clear.header.stamp = now
@@ -99,8 +99,8 @@ class ICGNetGraspNode(Node):
         self.declare_parameter('workspace_x_max', 1.05)
         self.declare_parameter('workspace_y_min', -0.50)
         self.declare_parameter('workspace_y_max', 0.50)
-        self.declare_parameter('workspace_z_min', 0.42)
-        self.declare_parameter('workspace_z_max', 0.90)
+        self.declare_parameter('workspace_z_min', 0.01)
+        self.declare_parameter('workspace_z_max', 0.60)
 
         config_path = os.path.expanduser(
             self.get_parameter('config_path').get_parameter_value().string_value
@@ -121,7 +121,7 @@ class ICGNetGraspNode(Node):
                   self.get_parameter('workspace_z_max').get_parameter_value().double_value),
         }
 
-        # ── Caricamento modello (non-fatale: il nodo resta attivo per debug) ─
+        # ── Model loading (non-fatal: node stays alive without model for debug) ─
         self.predictor = None
         if not config_path or not repo_path:
             self.get_logger().error(
@@ -131,15 +131,15 @@ class ICGNetGraspNode(Node):
         else:
             try:
                 self.predictor = ICGNetPredictor(config_path, icgnet_repo_path=repo_path)
-                self.get_logger().info("ICGNet caricato correttamente.")
+                self.get_logger().info("ICGNet loaded successfully.")
             except Exception as e:
-                self.get_logger().error(f"Impossibile caricare ICGNet: {e}")
+                self.get_logger().error(f"Failed to load ICGNet: {e}")
 
         # ── TF ───────────────────────────────────────────────────────────────
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
-        # ── Subscriber pointcloud (BEST_EFFORT per compatibilità con Gazebo) ─
+        # ── Pointcloud subscriber (BEST_EFFORT — required for Gazebo sensor QoS) ─
         qos_sensor = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
@@ -157,11 +157,11 @@ class ICGNetGraspNode(Node):
             if _ICGNET_MSGS_AVAILABLE else None
         )
 
-        # ── Servizio ─────────────────────────────────────────────────────────
+        # ── Service ──────────────────────────────────────────────────────────
         self.create_service(Trigger, '/icgnet/compute_grasps', self._compute_grasps_cb)
 
         self.get_logger().info(
-            f"ICGNetGraspNode pronto — topic={camera_topic}, "
+            f"ICGNetGraspNode ready — topic={camera_topic}, "
             f"target_frame={self.target_frame}, n_grasps={self.n_grasps}"
         )
 
@@ -176,41 +176,41 @@ class ICGNetGraspNode(Node):
 
         if self.latest_pc_msg is None:
             response.success = False
-            response.message = "Nessuna pointcloud ricevuta. Verifica che la simulazione sia attiva."
+            response.message = "No pointcloud received. Check that the simulation is running."
             return response
 
-        self.get_logger().info("Avvio calcolo grasp...")
+        self.get_logger().info("Starting grasp computation...")
         try:
             result = self._run_inference()
         except Exception as e:
-            self.get_logger().error(f"Errore durante l'inferenza: {e}")
+            self.get_logger().error(f"Inference error: {e}")
             response.success = False
-            response.message = f"Errore: {e}"
+            response.message = f"Error: {e}"
             return response
 
         n_total, n_filtered = result
         response.success = True
         response.message = (
-            f"{n_filtered} grasp pubblicati "
-            f"({n_total} totali, soglia score>={self.score_threshold:.2f})"
+            f"Published {n_filtered} grasps "
+            f"({n_total} total, score>={self.score_threshold:.2f})"
         )
         self.get_logger().info(response.message)
         return response
 
     def _run_inference(self):
         """
-        Pipeline completa:
-        1. PointCloud2 → numpy (frame camera)
+        Full pipeline:
+        1. PointCloud2 → numpy (camera frame)
         2. TF: camera → world
-        3. Preprocessing (voxel + normali verso camera)
+        3. Preprocessing (voxel downsample + normals toward camera)
         4. ICGNet inference
-        5. Pubblica PoseArray + MarkerArray
+        5. Publish PoseArray + MarkerArray + GraspArray
         """
-        # 1. Converti messaggio in numpy
+        # 1. Convert ROS message to numpy
         raw_points = pointcloud2_to_numpy(self.latest_pc_msg)
         cloud_frame = self.latest_pc_msg.header.frame_id
         if raw_points.shape[0] == 0:
-            raise RuntimeError("Pointcloud vuota")
+            raise RuntimeError("Empty pointcloud")
 
         # 2. TF: cloud_frame → target_frame (world)
         try:
@@ -223,16 +223,16 @@ class ICGNetGraspNode(Node):
         except (tf2_ros.LookupException,
                 tf2_ros.ConnectivityException,
                 tf2_ros.ExtrapolationException) as e:
-            raise RuntimeError(f"TF lookup {cloud_frame}→{self.target_frame} fallito: {e}")
+            raise RuntimeError(f"TF lookup {cloud_frame}→{self.target_frame} failed: {e}")
 
         t = tf_stamped.transform.translation
         q = tf_stamped.transform.rotation
         rot_mat = Rotation.from_quat([q.x, q.y, q.z, q.w]).as_matrix()
         translation = np.array([t.x, t.y, t.z])
 
-        # Trasforma: world_pts = R @ cam_pts.T + t
+        # world_pts = R @ cam_pts.T + t
         points_world = (rot_mat @ raw_points.T).T + translation
-        camera_pos_world = translation   # posizione camera nel frame world
+        camera_pos_world = translation
 
         # 3. Preprocessing (crop → downsample → outlier removal → normals)
         pts, normals = process_point_cloud(
@@ -242,14 +242,14 @@ class ICGNetGraspNode(Node):
             workspace_bounds=self.workspace_bounds,
         )
         if pts.shape[0] < 50:
-            raise RuntimeError(f"Punti insufficienti dopo preprocessing: {pts.shape[0]}")
+            raise RuntimeError(f"Too few points after preprocessing: {pts.shape[0]}")
 
-        self.get_logger().info(f"Preprocessing: {raw_points.shape[0]} → {pts.shape[0]} punti")
+        self.get_logger().info(f"Preprocessing: {raw_points.shape[0]} → {pts.shape[0]} points")
 
         # 4. ICGNet inference
         output = self.predictor.predict(pts, normals, n_grasps=self.n_grasps)
 
-        # 5. Estrai campi da ModelPredOut
+        # 5. Extract fields from ModelPredOut
         # scene_grasp_poses: [rot(G,3,3), centers(G,3), scores(G,), widths(G,), inst_ids(G,)]
         rot_matrices = output.scene_grasp_poses[0].cpu().numpy()
         centers      = output.scene_grasp_poses[1].cpu().numpy()
@@ -307,7 +307,7 @@ class ICGNetGraspNode(Node):
         )
         self.marker_pub.publish(marker_array)
 
-        # 9. Pubblica GraspArray con tutti i metadati (usato da grasp_executor)
+        # 9. Publish GraspArray with full metadata (consumed by grasp_executor)
         if self.rich_pub is not None:
             ga = GraspArray()
             ga.header.frame_id = self.target_frame

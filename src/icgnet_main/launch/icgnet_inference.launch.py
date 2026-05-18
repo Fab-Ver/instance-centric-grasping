@@ -1,15 +1,15 @@
 """
-Launch file per l'inferenza ICGNet locale.
+Launch ICGNet local inference node.
 
-Avvia solo il nodo grasp_service_node con parametri da icgnet_params.yaml.
-RViz è già in esecuzione da world.launch.py — non viene lanciata una seconda istanza.
+Starts grasp_service_node with parameters from icgnet_params.yaml.
+RViz is already running from world.launch.py — no second instance is launched.
 
-Uso:
+Usage:
     ros2 launch icgnet_main icgnet_inference.launch.py
 
-Prerequisiti:
-    - ros2 launch icgnet_main world.launch.py (in un altro terminale)
-    - Modifica src/icgnet_main/config/icgnet_params.yaml con i path corretti
+Prerequisites:
+    - ros2 launch icgnet_main world.launch.py (in another terminal)
+    - Edit src/icgnet_main/config/icgnet_params.yaml with correct paths
 """
 import os
 from ament_index_python.packages import get_package_share_directory

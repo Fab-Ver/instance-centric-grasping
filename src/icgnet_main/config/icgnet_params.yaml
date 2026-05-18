@@ -1,27 +1,24 @@
 icgnet_grasp_node:
   ros__parameters:
-    # ── PATH DA EDITARE UNA VOLTA ──────────────────────────────────────────────
-    # Percorso assoluto al config.yaml del checkpoint ICGNet.
-    # Supporta ~ (home expansion). Esempio:
-    #   config_path: "~/icg_benchmark/data/icgnet/51--0.656/config.yaml"
+    # ── EDIT ONCE ─────────────────────────────────────────────────────────────
+    # Absolute path to the ICGNet checkpoint config.yaml (~ expansion supported).
     config_path: "~/Robotics_Project/instance-centric-grasping/icgnet_weights/config.yaml"
 
-    # Percorso alla root del repository icg_net clonato.
-    # Esempio: "~/icg_net"
+    # Root of the cloned icg_net repository.
     icgnet_repo_path: "~/icg_net"
     # ──────────────────────────────────────────────────────────────────────────
 
-    # Topic della pointcloud dalla camera RGB-D di Gazebo
+    # PointCloud2 topic from the Gazebo RGB-D camera
     camera_topic: "/camera/rgbd_camera/points"
 
-    # Frame target per la trasformazione della cloud prima dell'inferenza.
-    # ICGNet richiede la cloud in world frame (tavolo a z=0).
+    # Target frame for cloud transform before inference.
+    # ICGNet requires the cloud in world frame (ground plane at z=0).
     target_frame: "world"
 
-    # Dimensione voxel per il downsampling (m). Valori tipici: 0.005 - 0.02
+    # Voxel size for downsampling (m). Typical range: 0.005 - 0.02
     voxel_size: 0.01
 
-    # Numero di grasp da generare per scena
+    # Number of grasps to generate per scene
     n_grasps: 32
 
     # Soglia minima sullo score ICGNet [0.0 - 1.0].
