@@ -5,7 +5,7 @@
 from ament_index_python.packages import get_package_share_directory
 import launch
 from launch.substitutions import Command, LaunchConfiguration, TextSubstitution
-from launch.actions import IncludeLaunchDescription, SetEnvironmentVariable
+from launch.actions import IncludeLaunchDescription, SetEnvironmentVariable, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 import launch_ros
 import os
@@ -111,7 +111,7 @@ def generate_launch_description():
         rviz_node,
         gzclient,
         gzserver,
-        spawn_entity,
+        TimerAction(period=15.0, actions=[spawn_entity]),
         spawn_arm_controller,
         spawn_hand_controller
     ])
