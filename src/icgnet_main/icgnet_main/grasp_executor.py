@@ -3,11 +3,15 @@ from threading import Lock, Thread
 
 import numpy as np
 import rclpy
+import rclpy.duration
+from geometry_msgs.msg import Point
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from scipy.spatial.transform import Rotation
+from std_msgs.msg import ColorRGBA
 from std_srvs.srv import Trigger
+from visualization_msgs.msg import Marker, MarkerArray
 
 from pymoveit2 import MoveIt2, MoveIt2Gripper
 from pymoveit2.robots import panda as robot
@@ -21,6 +25,27 @@ SEMANTIC_CLASSES = {
 }
 
 
+def _gripper_points_world(c: np.ndarray, R: np.ndarray, w: float):
+    """Gripper wireframe keypoints in world frame. Matches grasp_service_node geometry."""
+    half_w = w / 2.0
+    lf_base = np.array([0.0,  half_w, -0.045])
+    rf_base = np.array([0.0, -half_w, -0.045])
+    lf_tip  = np.array([0.0,  half_w,  0.005])
+    rf_tip  = np.array([0.0, -half_w,  0.005])
+    cb      = np.array([0.0,  0.0,    -0.045])
+    handle  = np.array([0.0,  0.0,    -0.115])
+
+    def wp(lp):
+        return c + R @ lp
+
+    return [
+        (wp(lf_base), wp(lf_tip)),
+        (wp(rf_base), wp(rf_tip)),
+        (wp(rf_base), wp(lf_base)),
+        (wp(cb),      wp(handle)),
+    ]
+
+
 class GraspExecutorNode(Node):
     def __init__(self):
         super().__init__('grasp_executor_node')
@@ -31,7 +56,6 @@ class GraspExecutorNode(Node):
         self.declare_parameter('default_max_attempts', 5)
         self.declare_parameter('approach_offset', 0.10)
         self.declare_parameter('pre_grasp_z_offset', 0.10)
-        self.declare_parameter('grasp_z_correction', 0.0)
         self.declare_parameter('lift_height', 0.25)
         self.declare_parameter('workspace_x_min', 0.20)
         self.declare_parameter('workspace_x_max', 0.80)
@@ -45,7 +69,6 @@ class GraspExecutorNode(Node):
         self._lift_height = self.get_parameter('lift_height').get_parameter_value().double_value
         self._default_min_score = self.get_parameter('default_min_score').get_parameter_value().double_value
         self._default_max_attempts = self.get_parameter('default_max_attempts').get_parameter_value().integer_value
-        self._grasp_z_correction = self.get_parameter('grasp_z_correction').get_parameter_value().double_value
         self._ws = {
             'x': (self.get_parameter('workspace_x_min').get_parameter_value().double_value,
                   self.get_parameter('workspace_x_max').get_parameter_value().double_value),
@@ -88,6 +111,8 @@ class GraspExecutorNode(Node):
         self._latest_grasps: GraspArray | None = None
         self._grasps_lock = Lock()
         self.create_subscription(GraspArray, rich_topic, self._grasps_cb, 10, callback_group=cb_sub)
+
+        self._current_grasp_pub = self.create_publisher(MarkerArray, '/icgnet/current_grasp_marker', 1)
 
         self.create_service(ExecuteGrasp, '/icgnet/execute_grasp', self._execute_grasp_cb, callback_group=cb_svc)
 
@@ -146,17 +171,24 @@ class GraspExecutorNode(Node):
             return res
 
         candidates = candidates[:max_attempts]
-        self.get_logger().info(f"{len(candidates)} candidates, attempting up to {max_attempts}")
+        scores_str = ', '.join(f'{g.score:.2f}' for g in candidates)
+        self.get_logger().info(
+            f"{len(candidates)} candidates ordered by score: [{scores_str}]"
+        )
 
         self._gripper.open()
         self._gripper.wait_until_executed()
 
         for i, g in enumerate(candidates):
+            p = g.pose.position
             self.get_logger().info(
                 f"Attempt {i+1}/{len(candidates)}: score={g.score:.2f} "
-                f"inst={g.instance_id} cls={g.semantic_class}"
+                f"inst={g.instance_id} cls={g.semantic_class} "
+                f"pos=[{p.x:.3f},{p.y:.3f},{p.z:.3f}]"
             )
+            self._publish_current_grasp_marker(g)
             if self._execute_single_grasp(g):
+                self._clear_current_grasp_marker()
                 res.success = True
                 res.grasps_attempted = i + 1
                 res.message = f"Grasp succeeded on attempt {i+1}"
@@ -165,6 +197,7 @@ class GraspExecutorNode(Node):
             self._gripper.open()
             self._gripper.wait_until_executed()
 
+        self._clear_current_grasp_marker()
         res.success = False
         res.grasps_attempted = len(candidates)
         res.message = f"All {len(candidates)} grasp attempts failed"
@@ -204,8 +237,51 @@ class GraspExecutorNode(Node):
         self.get_logger().warn(f"Unknown target '{target}' — treating as 'any'")
         return True
 
+    def _publish_current_grasp_marker(self, g):
+        pos = np.array([g.pose.position.x, g.pose.position.y, g.pose.position.z])
+        q = g.pose.orientation
+        R = Rotation.from_quat([q.x, q.y, q.z, q.w]).as_matrix()
+        w = float(np.clip(g.width, 0.02, 0.08))
+        now = self.get_clock().now().to_msg()
+
+        ma = MarkerArray()
+        clear = Marker()
+        clear.header.frame_id = 'world'
+        clear.header.stamp = now
+        clear.action = Marker.DELETEALL
+        ma.markers.append(clear)
+
+        m = Marker()
+        m.header.frame_id = 'world'
+        m.header.stamp = now
+        m.ns = 'current_grasp'
+        m.id = 0
+        m.type = Marker.LINE_LIST
+        m.action = Marker.ADD
+        m.scale.x = 0.006
+        m.lifetime = rclpy.duration.Duration(seconds=60).to_msg()
+
+        color = ColorRGBA(r=0.0, g=1.0, b=1.0, a=1.0)  # cyan = active attempt
+        for start, end in _gripper_points_world(pos, R, w):
+            m.points.append(Point(x=float(start[0]), y=float(start[1]), z=float(start[2])))
+            m.points.append(Point(x=float(end[0]),   y=float(end[1]),   z=float(end[2])))
+            m.colors.append(color)
+            m.colors.append(color)
+
+        ma.markers.append(m)
+        self._current_grasp_pub.publish(ma)
+
+    def _clear_current_grasp_marker(self):
+        ma = MarkerArray()
+        clear = Marker()
+        clear.header.frame_id = 'world'
+        clear.header.stamp = self.get_clock().now().to_msg()
+        clear.action = Marker.DELETEALL
+        ma.markers.append(clear)
+        self._current_grasp_pub.publish(ma)
+
     def _execute_single_grasp(self, g) -> bool:
-        pos = np.array([g.pose.position.x, g.pose.position.y, g.pose.position.z + self._grasp_z_correction])
+        pos = np.array([g.pose.position.x, g.pose.position.y, g.pose.position.z])
         q = g.pose.orientation
         quat_xyzw = [q.x, q.y, q.z, q.w]
         approach = Rotation.from_quat(quat_xyzw).as_matrix()[:, 2]  # z-col = approach axis
