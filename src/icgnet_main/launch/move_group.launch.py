@@ -55,6 +55,8 @@ def generate_launch_description():
             ])},
             {'move_group.start_state_max_bounds_error': 0.1},
             {'trajectory_execution.allowed_start_tolerance': 0.0},
+            {'trajectory_execution.execution_duration_monitoring': False},
+            {'trajectory_execution.allowed_execution_duration_scaling': 20.0},
         ],
     )
 

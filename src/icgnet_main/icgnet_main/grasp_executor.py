@@ -30,6 +30,8 @@ class GraspExecutorNode(Node):
         self.declare_parameter('default_min_score', 0.4)
         self.declare_parameter('default_max_attempts', 5)
         self.declare_parameter('approach_offset', 0.10)
+        self.declare_parameter('pre_grasp_z_offset', 0.10)
+        self.declare_parameter('grasp_z_correction', 0.0)
         self.declare_parameter('lift_height', 0.25)
         self.declare_parameter('workspace_x_min', 0.20)
         self.declare_parameter('workspace_x_max', 0.80)
@@ -39,9 +41,11 @@ class GraspExecutorNode(Node):
         self.declare_parameter('workspace_z_max', 0.60)
 
         self._approach_offset = self.get_parameter('approach_offset').get_parameter_value().double_value
+        self._pre_grasp_z_offset = self.get_parameter('pre_grasp_z_offset').get_parameter_value().double_value
         self._lift_height = self.get_parameter('lift_height').get_parameter_value().double_value
         self._default_min_score = self.get_parameter('default_min_score').get_parameter_value().double_value
         self._default_max_attempts = self.get_parameter('default_max_attempts').get_parameter_value().integer_value
+        self._grasp_z_correction = self.get_parameter('grasp_z_correction').get_parameter_value().double_value
         self._ws = {
             'x': (self.get_parameter('workspace_x_min').get_parameter_value().double_value,
                   self.get_parameter('workspace_x_max').get_parameter_value().double_value),
@@ -64,8 +68,8 @@ class GraspExecutorNode(Node):
             group_name=robot.MOVE_GROUP_ARM,
             callback_group=cb_arm,
         )
-        self._arm.max_velocity = 0.3
-        self._arm.max_acceleration = 0.3
+        self._arm.max_velocity = 0.2
+        self._arm.max_acceleration = 0.2
         self._arm.orientation_tolerance = 0.05
 
         self._gripper = MoveIt2Gripper(
@@ -201,12 +205,16 @@ class GraspExecutorNode(Node):
         return True
 
     def _execute_single_grasp(self, g) -> bool:
-        pos = np.array([g.pose.position.x, g.pose.position.y, g.pose.position.z])
+        pos = np.array([g.pose.position.x, g.pose.position.y, g.pose.position.z + self._grasp_z_correction])
         q = g.pose.orientation
         quat_xyzw = [q.x, q.y, q.z, q.w]
         approach = Rotation.from_quat(quat_xyzw).as_matrix()[:, 2]  # z-col = approach axis
 
-        pre_pos = (pos - self._approach_offset * approach).tolist()
+        # Pre-grasp: pull back along approach axis AND lift above grasp z.
+        # Lifting avoids near-floor arm configurations where the effort JTC
+        # can't maintain torque balance (joint4 near its -3.07 rad limit).
+        z_bias = np.array([0.0, 0.0, self._pre_grasp_z_offset])
+        pre_pos = (pos - self._approach_offset * approach + z_bias).tolist()
 
         self.get_logger().info(
             f"[DIAG] grasp_pos=[{pos[0]:.4f},{pos[1]:.4f},{pos[2]:.4f}] "
