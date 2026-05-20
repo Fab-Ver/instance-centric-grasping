@@ -59,7 +59,6 @@ class GraspExecutorNode(Node):
         self.declare_parameter('default_min_score', 0.4)
         self.declare_parameter('default_max_attempts', 5)
         self.declare_parameter('approach_offset', 0.10)
-        self.declare_parameter('pre_grasp_z_offset', 0.10)
         self.declare_parameter('lift_height', 0.25)
         self.declare_parameter('workspace_x_min', 0.20)
         self.declare_parameter('workspace_x_max', 0.80)
@@ -73,7 +72,6 @@ class GraspExecutorNode(Node):
         self.declare_parameter('object_init_z', 0.05)
 
         self._approach_offset = self.get_parameter('approach_offset').get_parameter_value().double_value
-        self._pre_grasp_z_offset = self.get_parameter('pre_grasp_z_offset').get_parameter_value().double_value
         self._lift_height = self.get_parameter('lift_height').get_parameter_value().double_value
         self._default_min_score = self.get_parameter('default_min_score').get_parameter_value().double_value
         self._default_max_attempts = self.get_parameter('default_max_attempts').get_parameter_value().integer_value
@@ -365,25 +363,17 @@ class GraspExecutorNode(Node):
         quat_xyzw = [q.x, q.y, q.z, q.w]
         approach = Rotation.from_quat(quat_xyzw).as_matrix()[:, 2]  # z-col = approach axis
 
-        # ICGNet TCP is backed off 0.045m from the contact surface along the approach axis.
-        # contact_pos advances the TCP to the actual contact surface so the finger pads
-        # overlap with the object body when closing laterally.
-        ICGNET_BACKOFF = 0.045
-        contact_pos = pos + ICGNET_BACKOFF * approach
-
-        z_bias = np.array([0.0, 0.0, self._pre_grasp_z_offset])
-        pre_pos = (pos - self._approach_offset * approach + z_bias).tolist()
-        lift_pos = (contact_pos + np.array([0.0, 0.0, self._lift_height])).tolist()
+        pre_pos = (pos - self._approach_offset * approach).tolist()
+        lift_pos = (pos + np.array([0.0, 0.0, self._lift_height])).tolist()
         angle_deg = float(np.degrees(np.arccos(np.clip(-approach[2], -1.0, 1.0))))
 
         self.get_logger().info(
-            f"[PLAN] icgnet_tcp  = [{pos[0]:.4f}, {pos[1]:.4f}, {pos[2]:.4f}]  (backed-off)\n"
-            f"       contact_pos = [{contact_pos[0]:.4f}, {contact_pos[1]:.4f}, {contact_pos[2]:.4f}]  (actual grasp target)\n"
-            f"       pre_pos     = [{pre_pos[0]:.4f}, {pre_pos[1]:.4f}, {pre_pos[2]:.4f}]\n"
-            f"       lift_pos    = [{lift_pos[0]:.4f}, {lift_pos[1]:.4f}, {lift_pos[2]:.4f}]\n"
-            f"       approach    = [{approach[0]:.4f}, {approach[1]:.4f}, {approach[2]:.4f}]"
+            f"[PLAN] grasp_tcp = [{pos[0]:.4f}, {pos[1]:.4f}, {pos[2]:.4f}]\n"
+            f"       pre_pos  = [{pre_pos[0]:.4f}, {pre_pos[1]:.4f}, {pre_pos[2]:.4f}]\n"
+            f"       lift_pos = [{lift_pos[0]:.4f}, {lift_pos[1]:.4f}, {lift_pos[2]:.4f}]\n"
+            f"       approach = [{approach[0]:.4f}, {approach[1]:.4f}, {approach[2]:.4f}]"
             f"  ({angle_deg:.1f}° from vertical)\n"
-            f"       width       = {g.width:.4f} m"
+            f"       width    = {g.width:.4f} m"
         )
 
         # ── Step 1: pre-grasp ──────────────────────────────────────────────────
@@ -401,13 +391,17 @@ class GraspExecutorNode(Node):
             return False
         self.get_logger().info(f"[STEP 1/4] Pre-grasp reached in {dt:.2f}s")
 
-        # ── Step 2: approach to contact position (backed-off + 0.045m along approach) ──
+        # ── Step 2: slow final approach to grasp position ─────────────────────
+        self._arm.max_velocity = 0.1
+        self._arm.max_acceleration = 0.1
         self.get_logger().info(
-            f"[STEP 2/4] APPROACH → [{contact_pos[0]:.3f}, {contact_pos[1]:.3f}, {contact_pos[2]:.3f}]"
+            f"[STEP 2/4] APPROACH → [{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}]"
         )
         t0 = time.time()
-        self._arm.move_to_pose(position=contact_pos.tolist(), quat_xyzw=quat_xyzw)
+        self._arm.move_to_pose(position=pos.tolist(), quat_xyzw=quat_xyzw)
         ok = self._arm.wait_until_executed()
+        self._arm.max_velocity = 0.5
+        self._arm.max_acceleration = 0.5
         dt = time.time() - t0
         if not ok:
             self.get_logger().warn(
