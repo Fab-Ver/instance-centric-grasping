@@ -5,7 +5,7 @@ grasp_executor_node:
     default_min_score: 0.4
     default_max_attempts: 5
     approach_offset: 0.10
-    pre_grasp_z_offset: 0.10
+    pre_grasp_z_offset: 0.15
     lift_height: 0.25
     workspace_x_min: 0.20
     workspace_x_max: 0.80
@@ -13,3 +13,7 @@ grasp_executor_node:
     workspace_y_max: 0.40
     workspace_z_min: 0.01
     workspace_z_max: 0.60
+    object_entity_name: 'target_obj'
+    object_init_x: 0.65
+    object_init_y: 0.0
+    object_init_z: 0.05

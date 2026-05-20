@@ -299,15 +299,15 @@ Visualization Manager:
       Value: true
     - Class: rviz_default_plugins/MarkerArray
       Enabled: true
-      Name: ICGNet Grasps
+      Name: Current Grasp (executor)
       Namespaces:
-        icgnet_grasps: true
+        current_grasp: true
       Topic:
         Depth: 5
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /icgnet/grasps_markers
+        Value: /icgnet/current_grasp_marker
       Value: true
     - Alpha: 0.9
       Arrow Length: 0.05

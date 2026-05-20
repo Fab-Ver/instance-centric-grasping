@@ -70,10 +70,12 @@ class ObjectSpawner(Node):
             self.get_logger().info('Single object mode: skipping distractors.')
 
     def spawn_one(self, model_name, entity_name, existing_poses, is_target=False):
-        x, y = self.get_random_pose(existing_poses)
-        if x is None:
-            self.get_logger().error(f'No space for {entity_name}')
-            return
+        # Fixed center position — comment out to re-enable random spawning
+        x, y = 0.65, 0.0
+        # x, y = self.get_random_pose(existing_poses)
+        # if x is None:
+        #     self.get_logger().error(f'No space for {entity_name}')
+        #     return
 
         yaw = random.uniform(0, 2 * math.pi)
         

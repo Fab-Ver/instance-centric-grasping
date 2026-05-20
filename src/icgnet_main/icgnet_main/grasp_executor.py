@@ -4,6 +4,7 @@ from threading import Lock, Thread
 import numpy as np
 import rclpy
 import rclpy.duration
+from gazebo_msgs.srv import SetEntityState
 from geometry_msgs.msg import Point
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
@@ -18,6 +19,9 @@ from pymoveit2.robots import panda as robot
 
 from icgnet_msgs.msg import GraspArray
 from icgnet_msgs.srv import ExecuteGrasp
+
+# Compact home configuration matching the URDF initial_value parameters
+HOME_JOINT_POSITIONS = [0.0, -1.0, 0.0, -2.5, 0.0, 2.0, 0.785]
 
 SEMANTIC_CLASSES = {
     'mug': 0, 'box': 1, 'can': 2, 'bottle': 3,
@@ -63,12 +67,20 @@ class GraspExecutorNode(Node):
         self.declare_parameter('workspace_y_max', 0.40)
         self.declare_parameter('workspace_z_min', 0.01)
         self.declare_parameter('workspace_z_max', 0.60)
+        self.declare_parameter('object_entity_name', 'target_obj')
+        self.declare_parameter('object_init_x', 0.65)
+        self.declare_parameter('object_init_y', 0.0)
+        self.declare_parameter('object_init_z', 0.05)
 
         self._approach_offset = self.get_parameter('approach_offset').get_parameter_value().double_value
         self._pre_grasp_z_offset = self.get_parameter('pre_grasp_z_offset').get_parameter_value().double_value
         self._lift_height = self.get_parameter('lift_height').get_parameter_value().double_value
         self._default_min_score = self.get_parameter('default_min_score').get_parameter_value().double_value
         self._default_max_attempts = self.get_parameter('default_max_attempts').get_parameter_value().integer_value
+        self._object_entity_name = self.get_parameter('object_entity_name').get_parameter_value().string_value
+        self._object_init_x = self.get_parameter('object_init_x').get_parameter_value().double_value
+        self._object_init_y = self.get_parameter('object_init_y').get_parameter_value().double_value
+        self._object_init_z = self.get_parameter('object_init_z').get_parameter_value().double_value
         self._ws = {
             'x': (self.get_parameter('workspace_x_min').get_parameter_value().double_value,
                   self.get_parameter('workspace_x_max').get_parameter_value().double_value),
@@ -91,8 +103,8 @@ class GraspExecutorNode(Node):
             group_name=robot.MOVE_GROUP_ARM,
             callback_group=cb_arm,
         )
-        self._arm.max_velocity = 0.2
-        self._arm.max_acceleration = 0.2
+        self._arm.max_velocity = 0.5
+        self._arm.max_acceleration = 0.5
         self._arm.orientation_tolerance = 0.05
 
         self._gripper = MoveIt2Gripper(
@@ -114,6 +126,10 @@ class GraspExecutorNode(Node):
 
         self._current_grasp_pub = self.create_publisher(MarkerArray, '/icgnet/current_grasp_marker', 1)
 
+        self._set_entity_client = self.create_client(
+            SetEntityState, '/set_entity_state', callback_group=cb_svc
+        )
+
         self.create_service(ExecuteGrasp, '/icgnet/execute_grasp', self._execute_grasp_cb, callback_group=cb_svc)
 
         self.get_logger().info('GraspExecutorNode ready.')
@@ -121,6 +137,43 @@ class GraspExecutorNode(Node):
     def _grasps_cb(self, msg: GraspArray):
         with self._grasps_lock:
             self._latest_grasps = msg
+
+    def _reset_scene(self):
+        self.get_logger().info('[RESET] Opening gripper...')
+        self._gripper.open()
+        self._gripper.wait_until_executed()
+
+        self.get_logger().info('[RESET] Moving arm to home...')
+        self._arm.move_to_configuration(
+            joint_positions=HOME_JOINT_POSITIONS,
+            joint_names=robot.joint_names(),
+        )
+        ok = self._arm.wait_until_executed()
+        if ok:
+            self.get_logger().info('[RESET] Arm at home.')
+        else:
+            self.get_logger().warn('[RESET] Arm home move failed (continuing anyway).')
+
+        if self._set_entity_client.wait_for_service(timeout_sec=2.0):
+            req = SetEntityState.Request()
+            req.state.name = self._object_entity_name
+            req.state.pose.position.x = self._object_init_x
+            req.state.pose.position.y = self._object_init_y
+            req.state.pose.position.z = self._object_init_z
+            req.state.pose.orientation.w = 1.0
+            req.state.reference_frame = 'world'
+            fut = self._set_entity_client.call_async(req)
+            while not fut.done():
+                time.sleep(0.05)
+            if fut.result().success:
+                self.get_logger().info(
+                    f'[RESET] Object "{self._object_entity_name}" reset to '
+                    f'[{self._object_init_x}, {self._object_init_y}, {self._object_init_z}]'
+                )
+            else:
+                self.get_logger().warn('[RESET] Object reset service returned failure.')
+        else:
+            self.get_logger().warn('[RESET] /set_entity_state service not available — object not reset.')
 
     def _execute_grasp_cb(self, req: ExecuteGrasp.Request, res: ExecuteGrasp.Response):
         target = req.target.strip() if req.target else 'any'
@@ -171,18 +224,29 @@ class GraspExecutorNode(Node):
             return res
 
         candidates = candidates[:max_attempts]
-        scores_str = ', '.join(f'{g.score:.2f}' for g in candidates)
         self.get_logger().info(
-            f"{len(candidates)} candidates ordered by score: [{scores_str}]"
+            f"[SELECT] {len(candidates)} candidates:"
         )
+        for i, g in enumerate(candidates):
+            q = g.pose.orientation
+            approach = Rotation.from_quat([q.x, q.y, q.z, q.w]).as_matrix()[:, 2]
+            angle_from_vertical = float(np.degrees(np.arccos(np.clip(-approach[2], -1.0, 1.0))))
+            p = g.pose.position
+            self.get_logger().info(
+                f"  [{i+1}] score={g.score:.2f} inst={g.instance_id} cls={g.semantic_class} "
+                f"pos=[{p.x:.3f},{p.y:.3f},{p.z:.3f}] "
+                f"approach=[{approach[0]:.3f},{approach[1]:.3f},{approach[2]:.3f}] "
+                f"angle_from_vertical={angle_from_vertical:.1f}° width={g.width:.3f}"
+            )
 
-        self._gripper.open()
-        self._gripper.wait_until_executed()
+        self.get_logger().info('[RESET] Resetting scene before first attempt...')
+        self._reset_scene()
 
         for i, g in enumerate(candidates):
             p = g.pose.position
             self.get_logger().info(
-                f"Attempt {i+1}/{len(candidates)}: score={g.score:.2f} "
+                f"{'='*60}\n"
+                f"[ATTEMPT {i+1}/{len(candidates)}] score={g.score:.2f} "
                 f"inst={g.instance_id} cls={g.semantic_class} "
                 f"pos=[{p.x:.3f},{p.y:.3f},{p.z:.3f}]"
             )
@@ -192,10 +256,16 @@ class GraspExecutorNode(Node):
                 res.success = True
                 res.grasps_attempted = i + 1
                 res.message = f"Grasp succeeded on attempt {i+1}"
+                self.get_logger().info(
+                    f"[SUCCESS] Grasp completed on attempt {i+1}/{len(candidates)}"
+                )
                 return res
-            # Re-open for next attempt
-            self._gripper.open()
-            self._gripper.wait_until_executed()
+            self.get_logger().warn(
+                f"[ATTEMPT {i+1}/{len(candidates)}] FAILED — "
+                f"{'resetting scene and trying next candidate' if i + 1 < len(candidates) else 'no more candidates'}"
+            )
+            if i + 1 < len(candidates):
+                self._reset_scene()
 
         self._clear_current_grasp_marker()
         res.success = False
@@ -205,21 +275,30 @@ class GraspExecutorNode(Node):
 
     def _filter_grasps(self, grasps, target: str, min_score: float) -> list:
         filtered = []
+        n_total = len(grasps)
+        n_score = n_ws = n_width = n_target = 0
         for g in grasps:
             p = g.pose.position
             if g.score < min_score:
+                n_score += 1
                 continue
             if g.width > 0.08:
+                n_width += 1
                 continue
-            if not (self._ws['x'][0] <= p.x <= self._ws['x'][1]):
-                continue
-            if not (self._ws['y'][0] <= p.y <= self._ws['y'][1]):
-                continue
-            if not (self._ws['z'][0] <= p.z <= self._ws['z'][1]):
+            if not (self._ws['x'][0] <= p.x <= self._ws['x'][1] and
+                    self._ws['y'][0] <= p.y <= self._ws['y'][1] and
+                    self._ws['z'][0] <= p.z <= self._ws['z'][1]):
+                n_ws += 1
                 continue
             if not self._matches_target(g, target):
+                n_target += 1
                 continue
             filtered.append(g)
+
+        self.get_logger().info(
+            f"[FILTER] total={n_total} → kept={len(filtered)} | "
+            f"rejected: score={n_score} width={n_width} workspace={n_ws} target={n_target}"
+        )
         filtered.sort(key=lambda g: g.score, reverse=True)
         return filtered
 
@@ -286,52 +365,71 @@ class GraspExecutorNode(Node):
         quat_xyzw = [q.x, q.y, q.z, q.w]
         approach = Rotation.from_quat(quat_xyzw).as_matrix()[:, 2]  # z-col = approach axis
 
-        # Pre-grasp: pull back along approach axis AND lift above grasp z.
-        # Lifting avoids near-floor arm configurations where the effort JTC
-        # can't maintain torque balance (joint4 near its -3.07 rad limit).
+        # ICGNet TCP is backed off 0.045m from the contact surface along the approach axis.
+        # contact_pos advances the TCP to the actual contact surface so the finger pads
+        # overlap with the object body when closing laterally.
+        ICGNET_BACKOFF = 0.045
+        contact_pos = pos + ICGNET_BACKOFF * approach
+
         z_bias = np.array([0.0, 0.0, self._pre_grasp_z_offset])
         pre_pos = (pos - self._approach_offset * approach + z_bias).tolist()
+        lift_pos = (contact_pos + np.array([0.0, 0.0, self._lift_height])).tolist()
+        angle_deg = float(np.degrees(np.arccos(np.clip(-approach[2], -1.0, 1.0))))
 
         self.get_logger().info(
-            f"[DIAG] grasp_pos=[{pos[0]:.4f},{pos[1]:.4f},{pos[2]:.4f}] "
-            f"pre_pos=[{pre_pos[0]:.4f},{pre_pos[1]:.4f},{pre_pos[2]:.4f}] "
-            f"quat=[{quat_xyzw[0]:.4f},{quat_xyzw[1]:.4f},{quat_xyzw[2]:.4f},{quat_xyzw[3]:.4f}] "
-            f"approach=[{approach[0]:.4f},{approach[1]:.4f},{approach[2]:.4f}] "
-            f"width={g.width:.4f}"
+            f"[PLAN] icgnet_tcp  = [{pos[0]:.4f}, {pos[1]:.4f}, {pos[2]:.4f}]  (backed-off)\n"
+            f"       contact_pos = [{contact_pos[0]:.4f}, {contact_pos[1]:.4f}, {contact_pos[2]:.4f}]  (actual grasp target)\n"
+            f"       pre_pos     = [{pre_pos[0]:.4f}, {pre_pos[1]:.4f}, {pre_pos[2]:.4f}]\n"
+            f"       lift_pos    = [{lift_pos[0]:.4f}, {lift_pos[1]:.4f}, {lift_pos[2]:.4f}]\n"
+            f"       approach    = [{approach[0]:.4f}, {approach[1]:.4f}, {approach[2]:.4f}]"
+            f"  ({angle_deg:.1f}° from vertical)\n"
+            f"       width       = {g.width:.4f} m"
         )
 
+        # ── Step 1: pre-grasp ──────────────────────────────────────────────────
+        self.get_logger().info(
+            f"[STEP 1/4] PRE-GRASP → [{pre_pos[0]:.3f}, {pre_pos[1]:.3f}, {pre_pos[2]:.3f}]"
+        )
         t0 = time.time()
         self._arm.move_to_pose(position=pre_pos, quat_xyzw=quat_xyzw)
         ok = self._arm.wait_until_executed()
         dt = time.time() - t0
         if not ok:
             self.get_logger().warn(
-                f"[DIAG] PRE-GRASP FAILED in {dt:.2f}s "
-                f"target=[{pre_pos[0]:.4f},{pre_pos[1]:.4f},{pre_pos[2]:.4f}]"
+                f"[STEP 1/4] PRE-GRASP FAILED in {dt:.2f}s — aborting this candidate"
             )
             return False
-        self.get_logger().info(f"[DIAG] pre-grasp OK in {dt:.2f}s")
+        self.get_logger().info(f"[STEP 1/4] Pre-grasp reached in {dt:.2f}s")
 
+        # ── Step 2: approach to contact position (backed-off + 0.045m along approach) ──
+        self.get_logger().info(
+            f"[STEP 2/4] APPROACH → [{contact_pos[0]:.3f}, {contact_pos[1]:.3f}, {contact_pos[2]:.3f}]"
+        )
         t0 = time.time()
-        self._arm.move_to_pose(position=pos.tolist(), quat_xyzw=quat_xyzw)
+        self._arm.move_to_pose(position=contact_pos.tolist(), quat_xyzw=quat_xyzw)
         ok = self._arm.wait_until_executed()
         dt = time.time() - t0
         if not ok:
             self.get_logger().warn(
-                f"[DIAG] APPROACH FAILED in {dt:.2f}s "
-                f"target=[{pos[0]:.4f},{pos[1]:.4f},{pos[2]:.4f}]"
+                f"[STEP 2/4] APPROACH FAILED in {dt:.2f}s — aborting this candidate"
             )
             return False
-        self.get_logger().info(f"[DIAG] approach OK in {dt:.2f}s")
+        self.get_logger().info(f"[STEP 2/4] Approach reached in {dt:.2f}s")
 
+        # ── Step 3: close gripper ─────────────────────────────────────────────
+        self.get_logger().info("[STEP 3/4] CLOSING GRIPPER <<<")
         self._gripper.close()
         self._gripper.wait_until_executed()
+        self.get_logger().info("[STEP 3/4] Gripper closed")
 
-        lift_pos = (pos + np.array([0.0, 0.0, self._lift_height])).tolist()
+        # ── Step 4: lift ──────────────────────────────────────────────────────
+        self.get_logger().info(
+            f"[STEP 4/4] LIFT → [{lift_pos[0]:.3f}, {lift_pos[1]:.3f}, {lift_pos[2]:.3f}]"
+        )
         t0 = time.time()
         self._arm.move_to_pose(position=lift_pos, quat_xyzw=quat_xyzw)
         self._arm.wait_until_executed()
-        self.get_logger().info(f"[DIAG] lift done in {time.time()-t0:.2f}s")
+        self.get_logger().info(f"[STEP 4/4] Lift done in {time.time()-t0:.2f}s")
 
         return True
 
