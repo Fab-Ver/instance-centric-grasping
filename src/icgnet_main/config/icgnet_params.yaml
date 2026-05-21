@@ -36,3 +36,23 @@ icgnet_grasp_node:
     workspace_y_max:  0.50
     workspace_z_min: 0.01
     workspace_z_max: 0.60
+
+    # ── Collision objects (MoveIt2 planning scene) ────────────────────────────
+    # Publish per-instance collision meshes reconstructed by ICGNet after each
+    # /icgnet/compute_grasps call. MoveIt2 uses them for collision-aware planning.
+    publish_collision_objects: true
+
+    # Run marching cubes per-instance to extract meshes (adds ~0.5-2s on GPU).
+    # Set false to disable collision publishing without touching publish_collision_objects.
+    return_meshes: true
+
+    # Collapse each reconstruction to its convex hull before publishing.
+    # ~10-50x fewer triangles → faster FCL collision queries. Disable only if
+    # concave geometry matters (e.g. mug with handle).
+    collision_use_convex_hull: true
+
+    # MoveIt2 planning scene collision topic (standard, do not change).
+    collision_object_topic: "/collision_object"
+
+    # Prefix for collision object IDs. Executor uses this to attach/detach by ID.
+    collision_id_prefix: "icgnet_inst_"

@@ -1,0 +1,24 @@
+<?xml version="1.0" ?>
+<sdf version="1.5">
+  <model name="cardboard_box">
+    <link name="link">
+      <inertial>
+        <mass>0.200</mass>
+        <!-- box: 0.10x0.08x0.12m -->
+        <inertia>
+          <ixx>0.000373</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>0.000413</iyy><iyz>0</iyz><izz>0.000273</izz>
+        </inertia>
+      </inertial>
+      <collision name="collision">
+        <geometry><box><size>0.100 0.080 0.120</size></box></geometry>
+      </collision>
+      <visual name="visual">
+        <geometry><box><size>0.100 0.080 0.120</size></box></geometry>
+        <material>
+          <ambient>0.8 0.7 0.5 1</ambient><diffuse>0.8 0.7 0.5 1</diffuse>
+        </material>
+      </visual>
+    </link>
+  </model>
+</sdf>

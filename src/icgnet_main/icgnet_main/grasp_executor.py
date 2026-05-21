@@ -6,7 +6,9 @@ import rclpy
 import rclpy.duration
 from gazebo_msgs.srv import SetEntityState
 from geometry_msgs.msg import Point
-from rclpy.callback_groups import ReentrantCallbackGroup
+from moveit_msgs.msg import AllowedCollisionEntry, AllowedCollisionMatrix, PlanningScene
+from moveit_msgs.srv import ApplyPlanningScene, GetPlanningScene
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from scipy.spatial.transform import Rotation
@@ -88,9 +90,23 @@ class GraspExecutorNode(Node):
                   self.get_parameter('workspace_z_max').get_parameter_value().double_value),
         }
 
+        self.declare_parameter('use_collision_scene', True)
+        self.declare_parameter('attach_weight', 0.2)
+        self.declare_parameter('acm_allowed_links',
+                               ['panda_leftfinger', 'panda_rightfinger', 'panda_hand'])
+        self.declare_parameter('collision_id_prefix', 'icgnet_inst_')
+
+        self._use_collision_scene = self.get_parameter('use_collision_scene').get_parameter_value().bool_value
+        self._attach_weight = self.get_parameter('attach_weight').get_parameter_value().double_value
+        self._acm_allowed_links = self.get_parameter('acm_allowed_links').get_parameter_value().string_array_value
+        self._collision_id_prefix = self.get_parameter('collision_id_prefix').get_parameter_value().string_value
+
+        # Callback groups: MutuallyExclusive for the grasp service and planning-scene clients
+        # to prevent deadlocks in MultiThreadedExecutor (ROS2 guideline).
+        cb_grasp_exec = MutuallyExclusiveCallbackGroup()
         cb_arm = ReentrantCallbackGroup()
         cb_gripper = ReentrantCallbackGroup()
-        cb_svc = ReentrantCallbackGroup()
+        cb_svc = MutuallyExclusiveCallbackGroup()
         cb_sub = ReentrantCallbackGroup()
 
         self._arm = MoveIt2(
@@ -128,7 +144,14 @@ class GraspExecutorNode(Node):
             SetEntityState, '/set_entity_state', callback_group=cb_svc
         )
 
-        self.create_service(ExecuteGrasp, '/icgnet/execute_grasp', self._execute_grasp_cb, callback_group=cb_svc)
+        self._apply_scene_client = self.create_client(
+            ApplyPlanningScene, '/apply_planning_scene', callback_group=cb_svc
+        )
+        self._get_scene_client = self.create_client(
+            GetPlanningScene, '/get_planning_scene', callback_group=cb_svc
+        )
+
+        self.create_service(ExecuteGrasp, '/icgnet/execute_grasp', self._execute_grasp_cb, callback_group=cb_grasp_exec)
 
         self.get_logger().info('GraspExecutorNode ready.')
 
@@ -357,6 +380,58 @@ class GraspExecutorNode(Node):
         ma.markers.append(clear)
         self._current_grasp_pub.publish(ma)
 
+    def _wait_for_future(self, future, timeout: float = 5.0) -> bool:
+        deadline = time.time() + timeout
+        while not future.done():
+            if time.time() > deadline:
+                return False
+            time.sleep(0.02)
+        return True
+
+    def _set_acm_permissive(self, target_co_id: str):
+        """Allow finger links to contact the target collision object during approach."""
+        if not self._use_collision_scene:
+            return
+        if not self._apply_scene_client.wait_for_service(timeout_sec=2.0):
+            self.get_logger().warn("ApplyPlanningScene not available, skipping ACM update.")
+            return
+
+        diff = PlanningScene(is_diff=True)
+        acm = AllowedCollisionMatrix()
+        links = list(self._acm_allowed_links) + [target_co_id]
+        acm.entry_names = links
+        # Allow all pairs between finger links and the target collision object
+        for _ in links:
+            entry = AllowedCollisionEntry()
+            entry.enabled = [True] * len(links)
+            acm.entry_values.append(entry)
+        diff.allowed_collision_matrix = acm
+        req = ApplyPlanningScene.Request(scene=diff)
+        fut = self._apply_scene_client.call_async(req)
+        if not self._wait_for_future(fut):
+            self.get_logger().warn("ACM permissive update timed out.")
+
+    def _restore_acm(self, target_co_id: str):
+        """Restore strict ACM by removing the temporary allowed entries."""
+        if not self._use_collision_scene:
+            return
+        if not self._apply_scene_client.wait_for_service(timeout_sec=2.0):
+            return
+
+        diff = PlanningScene(is_diff=True)
+        acm = AllowedCollisionMatrix()
+        links = list(self._acm_allowed_links) + [target_co_id]
+        acm.entry_names = links
+        for _ in links:
+            entry = AllowedCollisionEntry()
+            entry.enabled = [False] * len(links)
+            acm.entry_values.append(entry)
+        diff.allowed_collision_matrix = acm
+        req = ApplyPlanningScene.Request(scene=diff)
+        fut = self._apply_scene_client.call_async(req)
+        if not self._wait_for_future(fut):
+            self.get_logger().warn("ACM restore update timed out.")
+
     def _execute_single_grasp(self, g) -> bool:
         pos = np.array([g.pose.position.x, g.pose.position.y, g.pose.position.z])
         q = g.pose.orientation
@@ -375,6 +450,13 @@ class GraspExecutorNode(Node):
             f"  ({angle_deg:.1f}° from vertical)\n"
             f"       width    = {g.width:.4f} m"
         )
+
+        target_co_id = f"{self._collision_id_prefix}{g.instance_id}"
+
+        # ── Step 0: collision-scene barrier + permissive ACM ──────────────────
+        if self._use_collision_scene:
+            self._arm.update_planning_scene()  # sync barrier: wait for CollisionObjects to be ingested
+            self._set_acm_permissive(target_co_id)
 
         # ── Step 1/5: pre-grasp (joint-space) ─────────────────────────────────
         self.get_logger().info(
@@ -441,6 +523,19 @@ class GraspExecutorNode(Node):
             f"[STEP 3/5] Object confirmed between fingers (gap={finger_gap*1000:.1f}mm/side)"
         )
 
+        # ── Step 3b: attach collision object to TCP (post-grasp) ──────────────
+        if self._use_collision_scene:
+            try:
+                self._arm.attach_collision_object(
+                    id=target_co_id,
+                    link_name='panda_hand_tcp',
+                    touch_links=list(self._acm_allowed_links),
+                    weight=self._attach_weight,
+                )
+                self.get_logger().info(f"[STEP 3b] Attached '{target_co_id}' to panda_hand_tcp.")
+            except Exception as e:
+                self.get_logger().warn(f"[STEP 3b] Attach failed (non-fatal): {e}")
+
         # ── Step 4/5: Cartesian lift (straight +Z from grasp position) ────────
         # Cartesian path prevents the STATUS_ABORTED that occurs when joint-space
         # planning cannot find an IK solution from the extended grasp configuration.
@@ -472,6 +567,16 @@ class GraspExecutorNode(Node):
             self.get_logger().info(f"[STEP 5/5] Home reached in {dt:.2f}s")
         else:
             self.get_logger().warn(f"[STEP 5/5] Home failed in {dt:.2f}s (lift still succeeded)")
+
+        # ── Step 6: detach + remove collision object + restore ACM ───────────
+        if self._use_collision_scene:
+            try:
+                self._arm.detach_collision_object(id=target_co_id)
+                self._arm.remove_collision_object(id=target_co_id)
+                self.get_logger().info(f"[STEP 6] Detached and removed '{target_co_id}' from scene.")
+            except Exception as e:
+                self.get_logger().warn(f"[STEP 6] Detach/remove failed (non-fatal): {e}")
+            self._restore_acm(target_co_id)
 
         return True  # lift succeeded — object was grasped and raised
 

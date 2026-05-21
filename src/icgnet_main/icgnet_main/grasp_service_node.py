@@ -7,11 +7,13 @@ import rclpy
 import rclpy.duration
 import rclpy.time
 import tf2_ros
-from geometry_msgs.msg import Point, PoseArray, Pose
+from geometry_msgs.msg import Point, Pose, PoseArray
+from moveit_msgs.msg import CollisionObject
 from rclpy.node import Node
-from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from scipy.spatial.transform import Rotation
 from sensor_msgs.msg import PointCloud2, PointField
+from shape_msgs.msg import Mesh, MeshTriangle
 from std_msgs.msg import ColorRGBA, Header
 from std_srvs.srv import Trigger
 from visualization_msgs.msg import Marker, MarkerArray
@@ -153,6 +155,11 @@ class ICGNetGraspNode(Node):
         self.declare_parameter('workspace_y_max', 0.50)
         self.declare_parameter('workspace_z_min', 0.01)
         self.declare_parameter('workspace_z_max', 0.60)
+        self.declare_parameter('publish_collision_objects', True)
+        self.declare_parameter('collision_use_convex_hull', True)
+        self.declare_parameter('collision_object_topic', '/collision_object')
+        self.declare_parameter('collision_id_prefix', 'icgnet_inst_')
+        self.declare_parameter('return_meshes', True)
 
         config_path = os.path.expanduser(
             self.get_parameter('config_path').get_parameter_value().string_value
@@ -212,6 +219,21 @@ class ICGNetGraspNode(Node):
             if _ICGNET_MSGS_AVAILABLE else None
         )
 
+        # ── Collision object publisher (MoveIt2 planning scene) ──────────────
+        self._publish_co = self.get_parameter('publish_collision_objects').get_parameter_value().bool_value
+        co_topic = self.get_parameter('collision_object_topic').get_parameter_value().string_value
+        self._collision_pub = self.create_publisher(
+            CollisionObject,
+            co_topic,
+            QoSProfile(
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.VOLATILE,
+                history=HistoryPolicy.KEEP_LAST,
+                depth=10,
+            ),
+        )
+        self._published_collision_ids: set = set()
+
         # ── Service ──────────────────────────────────────────────────────────
         self.create_service(Trigger, '/icgnet/compute_grasps', self._compute_grasps_cb)
 
@@ -222,6 +244,72 @@ class ICGNetGraspNode(Node):
 
     def _pc_callback(self, msg: PointCloud2):
         self.latest_pc_msg = msg
+
+    def _trimesh_to_collision_object(self, mesh, co_id: str, frame_id: str) -> CollisionObject:
+        """Convert a trimesh.Trimesh (in world frame) to a MoveIt2 CollisionObject ADD message."""
+        co = CollisionObject()
+        co.header.frame_id = frame_id
+        co.header.stamp = self.get_clock().now().to_msg()
+        co.id = co_id
+        sm = Mesh()
+        sm.triangles = [
+            MeshTriangle(vertex_indices=[int(f[0]), int(f[1]), int(f[2])])
+            for f in mesh.faces
+        ]
+        sm.vertices = [
+            Point(x=float(v[0]), y=float(v[1]), z=float(v[2]))
+            for v in mesh.vertices
+        ]
+        co.meshes = [sm]
+        identity_pose = Pose()
+        identity_pose.orientation.w = 1.0
+        co.mesh_poses = [identity_pose]
+        co.operation = CollisionObject.ADD
+        return co
+
+    def _publish_collision_objects_from_reconstructions(self, reconstructions: list, frame_id: str):
+        """
+        Remove previously published collision objects, then publish one per ICGNet instance.
+        reconstructions: list of (trimesh.Trimesh, instance_id) tuples or just trimesh.Trimesh.
+        """
+        use_hull = self.get_parameter('collision_use_convex_hull').get_parameter_value().bool_value
+        prefix = self.get_parameter('collision_id_prefix').get_parameter_value().string_value
+        now = self.get_clock().now().to_msg()
+
+        # Remove previously published instances
+        for old_id in self._published_collision_ids:
+            co = CollisionObject()
+            co.header.frame_id = frame_id
+            co.header.stamp = now
+            co.id = old_id
+            co.operation = CollisionObject.REMOVE
+            self._collision_pub.publish(co)
+        self._published_collision_ids.clear()
+
+        # Publish new instances
+        for idx, item in enumerate(reconstructions):
+            if isinstance(item, tuple):
+                mesh, inst_id = item
+            else:
+                mesh, inst_id = item, idx
+
+            if len(mesh.faces) == 0:
+                self.get_logger().warn(f"Instance {inst_id}: empty mesh, skipping collision object.")
+                continue
+
+            if use_hull:
+                try:
+                    mesh = mesh.convex_hull
+                except Exception as e:
+                    self.get_logger().warn(f"Convex hull failed for instance {inst_id}: {e}. Using full mesh.")
+
+            co_id = f"{prefix}{inst_id}"
+            co = self._trimesh_to_collision_object(mesh, co_id, frame_id)
+            self._collision_pub.publish(co)
+            self._published_collision_ids.add(co_id)
+            self.get_logger().info(
+                f"Published CollisionObject '{co_id}' ({len(mesh.faces)} triangles, hull={use_hull})."
+            )
 
     def _compute_grasps_cb(self, _req, response):
         if self.predictor is None:
@@ -306,7 +394,8 @@ class ICGNetGraspNode(Node):
         self.preprocessed_cloud_pub.publish(cloud_msg)
 
         # 4. ICGNet inference
-        output = self.predictor.predict(pts, normals, n_grasps=self.n_grasps)
+        do_meshes = self._publish_co and self.get_parameter('return_meshes').get_parameter_value().bool_value
+        output = self.predictor.predict(pts, normals, n_grasps=self.n_grasps, return_meshes=do_meshes)
 
         # 5. Extract fields from ModelPredOut
         # scene_grasp_poses: [rot(G,3,3), centers(G,3), scores(G,), widths(G,), inst_ids(G,)]
@@ -381,6 +470,13 @@ class ICGNetGraspNode(Node):
                 g.semantic_class = int(cls_f[i])
                 ga.grasps.append(g)
             self.rich_pub.publish(ga)
+
+        # 10. Publish CollisionObjects from ICGNet reconstructions
+        if self._publish_co and do_meshes and output.reconstructions:
+            self._publish_collision_objects_from_reconstructions(output.reconstructions, self.target_frame)
+            self.get_logger().info(
+                f"Published {len(self._published_collision_ids)} collision object(s) to MoveIt2."
+            )
 
         return n_total, mask.sum()
 

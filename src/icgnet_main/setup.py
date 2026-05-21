@@ -4,6 +4,17 @@ from glob import glob
 
 package_name = 'icgnet_main'
 
+
+def collect_model_files():
+    """Collect all model files recursively from models/ for installation."""
+    data = []
+    for root, dirs, files in os.walk('models'):
+        if files:
+            install_dir = os.path.join('share', package_name, root)
+            data.append((install_dir, [os.path.join(root, f) for f in files]))
+    return data
+
+
 setup(
     name=package_name,
     version='0.0.0',
@@ -14,21 +25,16 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
         (os.path.join('share', package_name, 'worlds'), glob('worlds/*.world')),
-        (os.path.join('share', package_name, 'models', 'coke_can'), glob('models/coke_can/*')),
         (os.path.join('share', package_name, 'config', 'moveit'), glob('config/moveit/*')),
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
-    ],
+    ] + collect_model_files(),
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='burger',
     maintainer_email='burger@todo.todo',
-    description='TODO: Package description',
+    description='ICGNet main package — inference, grasp execution, Gazebo integration',
     license='TODO: License declaration',
-    extras_require={
-        'test': [
-            'pytest',
-        ],
-    },
+    extras_require={'test': ['pytest']},
     entry_points={
         'console_scripts': [
             'grasp_service_node = icgnet_main.grasp_service_node:main',

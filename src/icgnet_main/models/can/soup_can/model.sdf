@@ -1,0 +1,24 @@
+<?xml version="1.0" ?>
+<sdf version="1.5">
+  <model name="soup_can">
+    <link name="link">
+      <inertial>
+        <mass>0.400</mass>
+        <!-- cylinder: r=0.038m, h=0.100m -->
+        <inertia>
+          <ixx>0.000622</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>0.000622</iyy><iyz>0</iyz><izz>0.000289</izz>
+        </inertia>
+      </inertial>
+      <collision name="collision">
+        <geometry><cylinder><radius>0.038</radius><length>0.100</length></cylinder></geometry>
+      </collision>
+      <visual name="visual">
+        <geometry><cylinder><radius>0.038</radius><length>0.100</length></cylinder></geometry>
+        <material>
+          <ambient>0.8 0.2 0.2 1</ambient><diffuse>0.8 0.2 0.2 1</diffuse>
+        </material>
+      </visual>
+    </link>
+  </model>
+</sdf>

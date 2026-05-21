@@ -1,0 +1,24 @@
+<?xml version="1.0" ?>
+<sdf version="1.5">
+  <model name="pringles_can">
+    <link name="link">
+      <inertial>
+        <mass>0.200</mass>
+        <!-- cylinder: r=0.038m, h=0.220m -->
+        <inertia>
+          <ixx>0.000986</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>0.000986</iyy><iyz>0</iyz><izz>0.000144</izz>
+        </inertia>
+      </inertial>
+      <collision name="collision">
+        <geometry><cylinder><radius>0.038</radius><length>0.220</length></cylinder></geometry>
+      </collision>
+      <visual name="visual">
+        <geometry><cylinder><radius>0.038</radius><length>0.220</length></cylinder></geometry>
+        <material>
+          <ambient>0.8 0.4 0.1 1</ambient><diffuse>0.8 0.4 0.1 1</diffuse>
+        </material>
+      </visual>
+    </link>
+  </model>
+</sdf>

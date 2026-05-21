@@ -35,23 +35,25 @@ class ICGNetPredictor:
             logger.error(f"Error loading model: {e}")
             raise
 
-    def predict(self, points, normals, n_grasps=64):
+    def predict(self, points, normals, n_grasps=64, return_meshes=False):
         """
         Run inference on the given point cloud.
 
         :param points: numpy array (N, 3) of point positions.
         :param normals: numpy array (N, 3) of point normals.
         :param n_grasps: number of grasps to generate.
-        :return: ModelPredOut with scene_grasp_poses and class_predictions.
+        :param return_meshes: if True, run marching cubes per instance and populate
+                              ModelPredOut.reconstructions (list of trimesh.Trimesh).
+                              Adds ~0.5-2s latency on GPU. Use on-demand only.
+        :return: ModelPredOut with scene_grasp_poses, class_predictions, reconstructions.
         """
         from .pointcloud_utils import to_torch_tensors
 
         pts_t, nrm_t = to_torch_tensors(points, normals, device=self.device)
 
-        logger.info(f"Running inference on {pts_t.shape[0]} points...")
+        logger.info(f"Running inference on {pts_t.shape[0]} points (return_meshes={return_meshes})...")
 
         with torch.no_grad():
-            # return_scene_grasps=True returns grasps in full scene space.
             output = self.model(
                 pts_t,
                 normals=nrm_t,
@@ -59,10 +61,12 @@ class ICGNetPredictor:
                 grasp_normals=nrm_t,
                 n_grasps=n_grasps,
                 each_object=True,
-                return_meshes=False,
+                return_meshes=return_meshes,
                 return_scene_grasps=True,
             )
 
+        if return_meshes:
+            logger.info(f"Reconstructed {len(output.reconstructions)} instance mesh(es).")
         logger.success("Inference complete.")
         return output
 

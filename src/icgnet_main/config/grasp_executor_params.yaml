@@ -16,3 +16,19 @@ grasp_executor_node:
     object_init_x: 0.65
     object_init_y: 0.0
     object_init_z: 0.05
+
+    # ── Collision scene integration ───────────────────────────────────────────
+    # Master switch. Set false to disable all collision-scene logic (debug only).
+    use_collision_scene: true
+
+    # Weight (kg) assigned to the attached object after grasping.
+    attach_weight: 0.2
+
+    # Finger links allowed to contact the target during approach and grasp.
+    acm_allowed_links:
+      - panda_leftfinger
+      - panda_rightfinger
+      - panda_hand
+
+    # Must match grasp_service_node collision_id_prefix.
+    collision_id_prefix: 'icgnet_inst_'

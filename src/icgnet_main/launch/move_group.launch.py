@@ -17,7 +17,7 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time', default='false')
 
     pkg_icgnet = get_package_share_directory('icgnet_main')
-    pkg_panda  = get_package_share_directory('panda_ros2_gazebo')
+    pkg_panda  = get_package_share_directory('panda_description')
 
     urdf_path = os.path.join(pkg_panda, 'description', 'models', 'panda', 'panda.urdf')
     srdf_path = os.path.join(pkg_icgnet, 'config', 'moveit', 'panda.srdf')

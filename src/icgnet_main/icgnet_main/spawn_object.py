@@ -1,48 +1,64 @@
-import rclpy
-from rclpy.node import Node
-from ament_index_python.packages import get_package_share_directory
+import math
 import os
 import random
-import math
-import time
 import subprocess
-import sys
+import time
+
+import yaml
+import rclpy
+from ament_index_python.packages import get_package_share_directory
+from rclpy.node import Node
+
+
+def _load_catalog(models_dir: str) -> dict:
+    catalog_path = os.path.join(models_dir, 'catalog.yaml')
+    with open(catalog_path) as f:
+        return yaml.safe_load(f)
+
 
 class ObjectSpawner(Node):
     def __init__(self):
         super().__init__('object_spawner')
-        self.declare_parameter('target_type', 'coke_can')
+        self.declare_parameter('target_type', '')
+        self.declare_parameter('target_class', 'can')
         self.declare_parameter('num_objects', 1)
 
-        self.target_type = str(self.get_parameter('target_type').value)
-        try:
-            self.num_objects = int(self.get_parameter('num_objects').value)
-        except:
-            self.num_objects = 1
-        
-        # Valid classes mapping to ICGNet categories
-        self.categories = ['coke_can', 'bowl', 'cricket_ball', 'wood_cube_10cm', 'monkey_wrench', 'cylinder_offline']
-        
+        self.target_type = self.get_parameter('target_type').get_parameter_value().string_value.strip()
+        self.target_class = self.get_parameter('target_class').get_parameter_value().string_value.strip()
+        self.num_objects = self.get_parameter('num_objects').get_parameter_value().integer_value
+
+        pkg_share = get_package_share_directory('icgnet_main')
+        self.models_dir = os.path.join(pkg_share, 'models')
+        self.catalog = _load_catalog(self.models_dir)
+
+        # Resolve target model name
+        if self.target_type:
+            # Legacy: exact model name supplied
+            self._resolved_target = self.target_type
+        elif self.target_class in self.catalog:
+            self._resolved_target = random.choice(self.catalog[self.target_class]['models'])
+        else:
+            self.get_logger().warn(
+                f"Unknown target_class '{self.target_class}', defaulting to 'coke_can'."
+            )
+            self._resolved_target = 'coke_can'
+
+        # Flat list of all available model names for distractors
+        self._all_models = [m for cls in self.catalog.values() for m in cls['models']]
+
         self.get_logger().info('==========================================')
         self.get_logger().info(f'SPAWNER MODE: {"MULTI" if self.num_objects > 1 else "SINGLE"}')
-        self.get_logger().info(f'Target: {self.target_type}')
-        self.get_logger().info(f'Total Objects: {self.num_objects}')
+        self.get_logger().info(f'Target model: {self._resolved_target}')
+        self.get_logger().info(f'Total objects: {self.num_objects}')
         self.get_logger().info('==========================================')
 
-    def get_random_pose(self, existing_poses, min_dist=0.18):
+    def _get_random_pose(self, existing_poses, min_dist=0.18):
         for _ in range(500):
             x = random.uniform(0.40, 0.80)
             y = random.uniform(-0.30, 0.30)
-            dist_base = math.sqrt(x**2 + y**2)
-            if dist_base > 0.85 or dist_base < 0.30:
+            if math.sqrt(x**2 + y**2) > 0.85 or math.sqrt(x**2 + y**2) < 0.30:
                 continue
-            
-            too_close = False
-            for ex_x, ex_y in existing_poses:
-                if math.sqrt((x - ex_x)**2 + (y - ex_y)**2) < min_dist:
-                    too_close = True
-                    break
-            if not too_close:
+            if all(math.sqrt((x - ex)**2 + (y - ey)**2) >= min_dist for ex, ey in existing_poses):
                 return x, y
         return None, None
 
@@ -50,73 +66,75 @@ class ObjectSpawner(Node):
         existing_poses = []
         self.get_logger().info('Waiting 5s for Gazebo...')
         time.sleep(5.0)
-        
-        # ALWAYS spawn the target first
-        self.spawn_one(self.target_type, 'target_obj', existing_poses, is_target=True)
-        
-        # Spawn distractors ONLY IF num_objects > 1
+
+        self._spawn_one(self._resolved_target, 'target_obj', existing_poses, fixed_pos=None)
+
         if self.num_objects > 1:
             self.get_logger().info(f'Spawning {self.num_objects - 1} distractors...')
             for i in range(self.num_objects - 1):
-                self.get_logger().info('Waiting 0.5s for next distractor...')
                 time.sleep(0.5)
-                obj_type = random.choice(self.categories)
-                # Avoid target as distractor if possible
-                if obj_type == self.target_type:
-                    others = [c for c in self.categories if c != self.target_type]
-                    obj_type = random.choice(others) if others else self.categories[0]
-                self.spawn_one(obj_type, f'distractor_{i}', existing_poses)
+                others = [m for m in self._all_models if m != self._resolved_target]
+                distractor = random.choice(others) if others else self._all_models[0]
+                self._spawn_one(distractor, f'distractor_{i}', existing_poses)
         else:
-            self.get_logger().info('Single object mode: skipping distractors.')
+            self.get_logger().info('Single object mode: no distractors.')
 
-    def spawn_one(self, model_name, entity_name, existing_poses, is_target=False):
-        # Fixed center position — comment out to re-enable random spawning
-        x, y = 0.65, 0.0
-        # x, y = self.get_random_pose(existing_poses)
-        # if x is None:
-        #     self.get_logger().error(f'No space for {entity_name}')
-        #     return
+    def _spawn_one(self, model_name: str, entity_name: str, existing_poses: list, fixed_pos=None):
+        if fixed_pos is not None:
+            x, y = fixed_pos
+        else:
+            x, y = self._get_random_pose(existing_poses)
+            if x is None:
+                self.get_logger().error(f'No valid spawn position for {entity_name}. Skipping.')
+                return
 
         yaw = random.uniform(0, 2 * math.pi)
-        
+
+        model_sdf = os.path.join(self.models_dir, '*', model_name, 'model.sdf')
+        import glob as _glob
+        matches = _glob.glob(model_sdf)
+        if not matches:
+            # fallback: search two levels deep
+            model_sdf_direct = os.path.join(self.models_dir, model_name, 'model.sdf')
+            matches = [model_sdf_direct] if os.path.isfile(model_sdf_direct) else []
+
         cmd = [
             'ros2', 'run', 'gazebo_ros', 'spawn_entity.py',
             '-entity', entity_name,
             '-x', f'{x:.3f}', '-y', f'{y:.3f}', '-z', '0.05',
-            '-Y', f'{yaw:.3f}'
+            '-Y', f'{yaw:.3f}',
         ]
 
-        if model_name == 'cylinder_offline':
-            pkg_path = get_package_share_directory('icgnet_main')
-            model_path = os.path.join(pkg_path, 'models', 'coke_can', 'model.sdf')
-            cmd += ['-file', model_path]
+        if matches:
+            cmd += ['-file', matches[0]]
         else:
+            self.get_logger().warn(
+                f"Local SDF for '{model_name}' not found, falling back to Gazebo database."
+            )
             cmd += ['-database', model_name]
 
-        self.get_logger().info(f'[{entity_name}] Spawning {model_name}...')
-        
+        self.get_logger().info(f'[{entity_name}] Spawning {model_name} at ({x:.2f}, {y:.2f})...')
+
         try:
-            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-            while True:
-                line = process.stdout.readline()
-                if not line and process.poll() is not None:
-                    break
-                if line:
-                    self.get_logger().info(f'[{entity_name}] {line.strip()}')
-            
-            if process.returncode == 0:
-                self.get_logger().info(f'[{entity_name}] SUCCESS.')
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            for line in proc.stdout:
+                self.get_logger().info(f'[{entity_name}] {line.rstrip()}')
+            proc.wait()
+            if proc.returncode == 0:
+                self.get_logger().info(f'[{entity_name}] Spawned successfully.')
                 existing_poses.append((x, y))
             else:
-                self.get_logger().error(f'[{entity_name}] FAILED.')
+                self.get_logger().error(f'[{entity_name}] Spawn failed (exit {proc.returncode}).')
         except Exception as e:
-            self.get_logger().error(f'[{entity_name}] EXCEPTION: {str(e)}')
+            self.get_logger().error(f'[{entity_name}] Exception: {e}')
+
 
 def main():
     rclpy.init()
     node = ObjectSpawner()
     node.spawn_all()
     rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()
