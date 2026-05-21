@@ -22,8 +22,8 @@ icgnet_grasp_node:
     # Number of grasps to generate per scene
     n_grasps: 32
 
-    # Soglia minima sullo score ICGNet [0.0 - 1.0].
-    # 0.0 = pubblica tutto; aumentare (es. 0.5) per ridurre i falsi positivi.
+    # Minimum ICGNet score threshold [0.0 - 1.0].
+    # 0.0 = publish all; raise (e.g. 0.5) to reduce false positives.
     score_threshold: 0.0
 
     # Workspace bounding box (world frame, metres).

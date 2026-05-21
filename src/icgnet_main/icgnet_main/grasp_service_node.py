@@ -139,7 +139,7 @@ class ICGNetGraspNode(Node):
     def __init__(self):
         super().__init__('icgnet_grasp_node')
 
-        # ── Parametri ────────────────────────────────────────────────────────
+        # ── Parameters ───────────────────────────────────────────────────────
         self.declare_parameter('config_path', '')
         self.declare_parameter('icgnet_repo_path', '')
         self.declare_parameter('camera_topic', '/camera/rgbd_camera/points')
@@ -177,8 +177,8 @@ class ICGNetGraspNode(Node):
         self.predictor = None
         if not config_path or not repo_path:
             self.get_logger().error(
-                "config_path e/o icgnet_repo_path non configurati. "
-                "Modifica src/icgnet_main/config/icgnet_params.yaml"
+                "config_path and/or icgnet_repo_path not set. "
+                "Edit src/icgnet_main/config/icgnet_params.yaml"
             )
         else:
             try:
@@ -226,7 +226,7 @@ class ICGNetGraspNode(Node):
     def _compute_grasps_cb(self, _req, response):
         if self.predictor is None:
             response.success = False
-            response.message = "ICGNet non inizializzato. Controlla config_path e icgnet_repo_path."
+            response.message = "ICGNet not initialized. Check config_path and icgnet_repo_path."
             return response
 
         if self.latest_pc_msg is None:
@@ -332,7 +332,7 @@ class ICGNetGraspNode(Node):
 
         n_total = len(centers)
 
-        # 6. Filtra per score
+        # 6. Filter by score
         mask = scores >= self.score_threshold
         rot_f     = rot_matrices[mask]
         centers_f = centers[mask]
@@ -343,7 +343,7 @@ class ICGNetGraspNode(Node):
 
         now = self.get_clock().now().to_msg()
 
-        # 7. Pubblica PoseArray
+        # 7. Publish PoseArray
         pose_array = PoseArray()
         pose_array.header.frame_id = self.target_frame
         pose_array.header.stamp = now

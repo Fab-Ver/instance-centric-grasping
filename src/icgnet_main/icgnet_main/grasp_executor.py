@@ -376,9 +376,9 @@ class GraspExecutorNode(Node):
             f"       width    = {g.width:.4f} m"
         )
 
-        # ── Step 1: pre-grasp ──────────────────────────────────────────────────
+        # ── Step 1/5: pre-grasp (joint-space) ─────────────────────────────────
         self.get_logger().info(
-            f"[STEP 1/4] PRE-GRASP → [{pre_pos[0]:.3f}, {pre_pos[1]:.3f}, {pre_pos[2]:.3f}]"
+            f"[STEP 1/5] PRE-GRASP → [{pre_pos[0]:.3f}, {pre_pos[1]:.3f}, {pre_pos[2]:.3f}]"
         )
         t0 = time.time()
         self._arm.move_to_pose(position=pre_pos, quat_xyzw=quat_xyzw)
@@ -386,46 +386,94 @@ class GraspExecutorNode(Node):
         dt = time.time() - t0
         if not ok:
             self.get_logger().warn(
-                f"[STEP 1/4] PRE-GRASP FAILED in {dt:.2f}s — aborting this candidate"
+                f"[STEP 1/5] PRE-GRASP FAILED in {dt:.2f}s — aborting this candidate"
             )
             return False
-        self.get_logger().info(f"[STEP 1/4] Pre-grasp reached in {dt:.2f}s")
+        self.get_logger().info(f"[STEP 1/5] Pre-grasp reached in {dt:.2f}s")
 
-        # ── Step 2: slow final approach to grasp position ─────────────────────
+        # ── Step 2/5: Cartesian approach (straight line along approach axis) ──
+        # Cartesian planning ensures TCP follows the approach axis exactly,
+        # avoiding the object-sweep artefact of joint-space planning.
         self._arm.max_velocity = 0.1
         self._arm.max_acceleration = 0.1
         self.get_logger().info(
-            f"[STEP 2/4] APPROACH → [{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}]"
+            f"[STEP 2/5] CARTESIAN APPROACH → [{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}]"
         )
         t0 = time.time()
-        self._arm.move_to_pose(position=pos.tolist(), quat_xyzw=quat_xyzw)
+        self._arm.move_to_pose(
+            position=pos.tolist(), quat_xyzw=quat_xyzw,
+            cartesian=True, cartesian_max_step=0.005, cartesian_fraction_threshold=0.9,
+        )
         ok = self._arm.wait_until_executed()
         self._arm.max_velocity = 0.5
         self._arm.max_acceleration = 0.5
         dt = time.time() - t0
         if not ok:
             self.get_logger().warn(
-                f"[STEP 2/4] APPROACH FAILED in {dt:.2f}s — aborting this candidate"
+                f"[STEP 2/5] APPROACH FAILED in {dt:.2f}s — aborting this candidate"
             )
             return False
-        self.get_logger().info(f"[STEP 2/4] Approach reached in {dt:.2f}s")
+        self.get_logger().info(f"[STEP 2/5] Approach reached in {dt:.2f}s")
 
-        # ── Step 3: close gripper ─────────────────────────────────────────────
-        self.get_logger().info("[STEP 3/4] CLOSING GRIPPER <<<")
+        # ── Step 3/5: close gripper + verify grasp ────────────────────────────
+        self.get_logger().info("[STEP 3/5] CLOSING GRIPPER")
         self._gripper.close()
         self._gripper.wait_until_executed()
-        self.get_logger().info("[STEP 3/4] Gripper closed")
+        time.sleep(0.3)  # let the controller settle before reading finger positions
 
-        # ── Step 4: lift ──────────────────────────────────────────────────────
+        # Detect grasp: if fingers are fully closed the object was missed.
+        # OPEN=0.04m, CLOSED=0.0m per finger; threshold 5mm means jaw gap > 10mm total.
+        js = self._arm.joint_state
+        finger_gap = 0.0
+        if js is not None:
+            for fname in robot.gripper_joint_names():
+                try:
+                    finger_gap = max(finger_gap, js.position[js.name.index(fname)])
+                except ValueError:
+                    pass
+        if finger_gap < 0.005:
+            self.get_logger().warn(
+                f"[STEP 3/5] Gripper fully closed (gap={finger_gap*1000:.1f}mm) — "
+                "no object grasped, aborting"
+            )
+            return False
         self.get_logger().info(
-            f"[STEP 4/4] LIFT → [{lift_pos[0]:.3f}, {lift_pos[1]:.3f}, {lift_pos[2]:.3f}]"
+            f"[STEP 3/5] Object confirmed between fingers (gap={finger_gap*1000:.1f}mm/side)"
+        )
+
+        # ── Step 4/5: Cartesian lift (straight +Z from grasp position) ────────
+        # Cartesian path prevents the STATUS_ABORTED that occurs when joint-space
+        # planning cannot find an IK solution from the extended grasp configuration.
+        self.get_logger().info(
+            f"[STEP 4/5] CARTESIAN LIFT → [{lift_pos[0]:.3f}, {lift_pos[1]:.3f}, {lift_pos[2]:.3f}]"
         )
         t0 = time.time()
-        self._arm.move_to_pose(position=lift_pos, quat_xyzw=quat_xyzw)
-        self._arm.wait_until_executed()
-        self.get_logger().info(f"[STEP 4/4] Lift done in {time.time()-t0:.2f}s")
+        self._arm.move_to_pose(
+            position=lift_pos, quat_xyzw=quat_xyzw,
+            cartesian=True, cartesian_max_step=0.005, cartesian_fraction_threshold=0.9,
+        )
+        ok = self._arm.wait_until_executed()
+        dt = time.time() - t0
+        if not ok:
+            self.get_logger().warn(f"[STEP 4/5] LIFT FAILED in {dt:.2f}s")
+            return False
+        self.get_logger().info(f"[STEP 4/5] Object lifted in {dt:.2f}s")
 
-        return True
+        # ── Step 5/5: return to home (object secured, arm in safe config) ─────
+        self.get_logger().info("[STEP 5/5] MOVING TO HOME")
+        t0 = time.time()
+        self._arm.move_to_configuration(
+            joint_positions=HOME_JOINT_POSITIONS,
+            joint_names=robot.joint_names(),
+        )
+        ok_home = self._arm.wait_until_executed()
+        dt = time.time() - t0
+        if ok_home:
+            self.get_logger().info(f"[STEP 5/5] Home reached in {dt:.2f}s")
+        else:
+            self.get_logger().warn(f"[STEP 5/5] Home failed in {dt:.2f}s (lift still succeeded)")
+
+        return True  # lift succeeded — object was grasped and raised
 
 
 def main(args=None):
