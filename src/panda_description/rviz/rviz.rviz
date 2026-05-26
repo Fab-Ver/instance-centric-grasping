@@ -329,6 +329,28 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /icgnet/grasps
       Value: true
+    - Class: moveit_rviz_plugin/PlanningScene
+      Enabled: true
+      Name: ICGNet Collision Meshes
+      Planning Scene Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /monitored_planning_scene
+      Robot Description: robot_description
+      Scene Geometry:
+        Scene Alpha: 0.7
+        Scene Color: 0; 180; 255
+        Scene Display Time: 0.009999999776482582
+        Show Scene Geometry: true
+      Scene Robot:
+        Attached Body Color: 150; 50; 150
+        Links With No Geometry: false
+        Robot Alpha: 1
+        Show Robot Collision: false
+        Show Robot Visual: false
+      Value: true
     - Class: moveit_rviz_plugin/MotionPlanning
       Enabled: true
       Move Group Namespace: ""

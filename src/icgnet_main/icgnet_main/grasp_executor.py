@@ -61,6 +61,7 @@ class GraspExecutorNode(Node):
         self.declare_parameter('default_min_score', 0.4)
         self.declare_parameter('default_max_attempts', 5)
         self.declare_parameter('approach_offset', 0.10)
+        self.declare_parameter('grasp_forward_offset', 0.04)
         self.declare_parameter('lift_height', 0.25)
         self.declare_parameter('workspace_x_min', 0.20)
         self.declare_parameter('workspace_x_max', 0.80)
@@ -74,6 +75,7 @@ class GraspExecutorNode(Node):
         self.declare_parameter('object_init_z', 0.05)
 
         self._approach_offset = self.get_parameter('approach_offset').get_parameter_value().double_value
+        self._grasp_forward_offset = self.get_parameter('grasp_forward_offset').get_parameter_value().double_value
         self._lift_height = self.get_parameter('lift_height').get_parameter_value().double_value
         self._default_min_score = self.get_parameter('default_min_score').get_parameter_value().double_value
         self._default_max_attempts = self.get_parameter('default_max_attempts').get_parameter_value().integer_value
@@ -438,17 +440,20 @@ class GraspExecutorNode(Node):
         quat_xyzw = [q.x, q.y, q.z, q.w]
         approach = Rotation.from_quat(quat_xyzw).as_matrix()[:, 2]  # z-col = approach axis
 
+        contact_pos = pos + self._grasp_forward_offset * approach
         pre_pos = (pos - self._approach_offset * approach).tolist()
-        lift_pos = (pos + np.array([0.0, 0.0, self._lift_height])).tolist()
+        lift_pos = (contact_pos + np.array([0.0, 0.0, self._lift_height])).tolist()
         angle_deg = float(np.degrees(np.arccos(np.clip(-approach[2], -1.0, 1.0))))
 
         self.get_logger().info(
-            f"[PLAN] grasp_tcp = [{pos[0]:.4f}, {pos[1]:.4f}, {pos[2]:.4f}]\n"
-            f"       pre_pos  = [{pre_pos[0]:.4f}, {pre_pos[1]:.4f}, {pre_pos[2]:.4f}]\n"
-            f"       lift_pos = [{lift_pos[0]:.4f}, {lift_pos[1]:.4f}, {lift_pos[2]:.4f}]\n"
-            f"       approach = [{approach[0]:.4f}, {approach[1]:.4f}, {approach[2]:.4f}]"
+            f"[PLAN] icgnet_tcp  = [{pos[0]:.4f}, {pos[1]:.4f}, {pos[2]:.4f}]\n"
+            f"       contact_pos = [{contact_pos[0]:.4f}, {contact_pos[1]:.4f}, {contact_pos[2]:.4f}]"
+            f"  (forward_offset={self._grasp_forward_offset*100:.0f}cm)\n"
+            f"       pre_pos     = [{pre_pos[0]:.4f}, {pre_pos[1]:.4f}, {pre_pos[2]:.4f}]\n"
+            f"       lift_pos    = [{lift_pos[0]:.4f}, {lift_pos[1]:.4f}, {lift_pos[2]:.4f}]\n"
+            f"       approach    = [{approach[0]:.4f}, {approach[1]:.4f}, {approach[2]:.4f}]"
             f"  ({angle_deg:.1f}° from vertical)\n"
-            f"       width    = {g.width:.4f} m"
+            f"       width       = {g.width:.4f} m"
         )
 
         target_co_id = f"{self._collision_id_prefix}{g.instance_id}"
@@ -487,15 +492,35 @@ class GraspExecutorNode(Node):
             cartesian=True, cartesian_max_step=0.005, cartesian_fraction_threshold=0.9,
         )
         ok = self._arm.wait_until_executed()
-        self._arm.max_velocity = 0.5
-        self._arm.max_acceleration = 0.5
         dt = time.time() - t0
         if not ok:
             self.get_logger().warn(
                 f"[STEP 2/5] APPROACH FAILED in {dt:.2f}s — aborting this candidate"
             )
+            self._arm.max_velocity = 0.5
+            self._arm.max_acceleration = 0.5
             return False
         self.get_logger().info(f"[STEP 2/5] Approach reached in {dt:.2f}s")
+
+        # ── Step 2b: micro-advance to contact position ────────────────────────
+        self.get_logger().info(
+            f"[STEP 2b] MICRO-ADVANCE → [{contact_pos[0]:.3f}, {contact_pos[1]:.3f}, {contact_pos[2]:.3f}]"
+        )
+        t0 = time.time()
+        self._arm.move_to_pose(
+            position=contact_pos.tolist(), quat_xyzw=quat_xyzw,
+            cartesian=True, cartesian_max_step=0.002, cartesian_fraction_threshold=0.9,
+        )
+        ok = self._arm.wait_until_executed()
+        self._arm.max_velocity = 0.5
+        self._arm.max_acceleration = 0.5
+        dt = time.time() - t0
+        if not ok:
+            self.get_logger().warn(
+                f"[STEP 2b] MICRO-ADVANCE FAILED in {dt:.2f}s — aborting this candidate"
+            )
+            return False
+        self.get_logger().info(f"[STEP 2b] Contact position reached in {dt:.2f}s")
 
         # ── Step 3/5: close gripper + verify grasp ────────────────────────────
         self.get_logger().info("[STEP 3/5] CLOSING GRIPPER")
