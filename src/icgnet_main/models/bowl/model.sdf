@@ -22,6 +22,25 @@
             <length>0.035</length>
           </cylinder>
         </geometry>
+              <surface>
+          <friction>
+            <ode>
+              <mu>1.0</mu>
+              <mu2>1.0</mu2>
+            </ode>
+            <torsional>
+              <coefficient>0.5</coefficient>
+              <surface_radius>0.01</surface_radius>
+            </torsional>
+          </friction>
+          <contact>
+            <ode>
+              <kp>1e6</kp>
+              <kd>50</kd>
+              <min_depth>0.001</min_depth>
+            </ode>
+          </contact>
+        </surface>
       </collision>
       <visual name="visual">
         <geometry>

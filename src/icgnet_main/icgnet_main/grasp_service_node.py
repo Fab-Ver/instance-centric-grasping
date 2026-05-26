@@ -160,6 +160,8 @@ class ICGNetGraspNode(Node):
         self.declare_parameter('collision_object_topic', '/collision_object')
         self.declare_parameter('collision_id_prefix', 'icgnet_inst_')
         self.declare_parameter('return_meshes', True)
+        self.declare_parameter('table_z_top', 0.05)
+        self.declare_parameter('table_z_margin', 0.005)
 
         config_path = os.path.expanduser(
             self.get_parameter('config_path').get_parameter_value().string_value
@@ -376,6 +378,16 @@ class ICGNetGraspNode(Node):
         # world_pts = R @ cam_pts.T + t
         points_world = (rot_mat @ raw_points.T).T + translation
         camera_pos_world = translation
+
+        # 3a. Remove table surface points (z ≤ table_z_top + table_z_margin)
+        table_z_top = self.get_parameter('table_z_top').get_parameter_value().double_value
+        table_z_margin = self.get_parameter('table_z_margin').get_parameter_value().double_value
+        z_cutoff = table_z_top + table_z_margin
+        above_table = points_world[:, 2] > z_cutoff
+        n_removed = int((~above_table).sum())
+        points_world = points_world[above_table]
+        if n_removed > 0:
+            self.get_logger().info(f"Table filter: removed {n_removed} pts at z≤{z_cutoff:.3f}m")
 
         # 3. Preprocessing (crop → downsample → outlier removal → normals)
         pts, normals = process_point_cloud(

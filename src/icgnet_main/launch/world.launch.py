@@ -47,6 +47,12 @@ def generate_launch_description():
             executable='static_transform_publisher',
             arguments=['0', '0', '0', '-1.5708', '0', '-1.5708', 'camera_link', 'camera_link_optical'],
         ),
+        # TABLE DISABLED — uncomment to re-enable with the table in icgnet_world.world
+        # Node(
+        #     package='icgnet_main',
+        #     executable='static_collision_publisher',
+        #     name='static_collision_publisher',
+        # ),
         # Object spawn disabled — add objects manually after launch:
         #   ros2 run icgnet_main spawn_object --ros-args -p target_class:=can
         #   ros2 run icgnet_main spawn_object --ros-args -p target_class:=bottle -p num_objects:=3

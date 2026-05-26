@@ -65,6 +65,11 @@ class GraspExecutorNode(Node):
         self.declare_parameter('approach_velocity', 0.05)
         self.declare_parameter('approach_acceleration', 0.05)
         self.declare_parameter('pregrasp_settle_time', 0.8)
+        self.declare_parameter('lift_velocity', 0.10)
+        self.declare_parameter('lift_acceleration', 0.10)
+        self.declare_parameter('cartesian_fraction_threshold', 0.85)
+        self.declare_parameter('cartesian_max_step_approach', 0.008)
+        self.declare_parameter('cartesian_max_step_micro', 0.003)
         self.declare_parameter('lift_height', 0.25)
         self.declare_parameter('workspace_x_min', 0.20)
         self.declare_parameter('workspace_x_max', 0.80)
@@ -82,6 +87,11 @@ class GraspExecutorNode(Node):
         self._approach_velocity = self.get_parameter('approach_velocity').get_parameter_value().double_value
         self._approach_acceleration = self.get_parameter('approach_acceleration').get_parameter_value().double_value
         self._pregrasp_settle_time = self.get_parameter('pregrasp_settle_time').get_parameter_value().double_value
+        self._lift_velocity = self.get_parameter('lift_velocity').get_parameter_value().double_value
+        self._lift_acceleration = self.get_parameter('lift_acceleration').get_parameter_value().double_value
+        self._cartesian_fraction_threshold = self.get_parameter('cartesian_fraction_threshold').get_parameter_value().double_value
+        self._cartesian_max_step_approach = self.get_parameter('cartesian_max_step_approach').get_parameter_value().double_value
+        self._cartesian_max_step_micro = self.get_parameter('cartesian_max_step_micro').get_parameter_value().double_value
         self._lift_height = self.get_parameter('lift_height').get_parameter_value().double_value
         self._default_min_score = self.get_parameter('default_min_score').get_parameter_value().double_value
         self._default_max_attempts = self.get_parameter('default_max_attempts').get_parameter_value().integer_value
@@ -128,6 +138,7 @@ class GraspExecutorNode(Node):
         self._arm.max_velocity = 0.5
         self._arm.max_acceleration = 0.5
         self._arm.orientation_tolerance = 0.05
+        self._arm.cartesian_jump_threshold = 5.0
 
         self._gripper = MoveIt2Gripper(
             node=self,
@@ -469,9 +480,19 @@ class GraspExecutorNode(Node):
 
         target_co_id = f"{self._collision_id_prefix}{g.instance_id}"
 
-        # ── Step 0: collision-scene barrier ───────────────────────────────────
+        # Slow velocity for all motion from pre-grasp through lift; restored after HOME.
+        self._arm.max_velocity = self._approach_velocity
+        self._arm.max_acceleration = self._approach_acceleration
+
+        # Open gripper to pre-grasp width before approaching
+        per_finger_pos = min(g.width / 2.0 + 0.01, 0.04)
+        self._gripper.move_to_position(per_finger_pos)
+        self._gripper.wait_until_executed()
+
+        # ── Step 0: collision-scene barrier + ACM permissive ──────────────────
         if self._use_collision_scene:
             self._arm.update_planning_scene()
+            self._set_acm_permissive(target_co_id)
 
         # ── Step 1/5: pre-grasp (joint-space) ─────────────────────────────────
         self.get_logger().info(
@@ -485,22 +506,14 @@ class GraspExecutorNode(Node):
             self.get_logger().warn(
                 f"[STEP 1/5] PRE-GRASP FAILED in {dt:.2f}s — aborting this candidate"
             )
+            self._arm.max_velocity = 0.5
+            self._arm.max_acceleration = 0.5
+            self._restore_acm(target_co_id)
             return False
         self.get_logger().info(f"[STEP 1/5] Pre-grasp reached in {dt:.2f}s")
         time.sleep(self._pregrasp_settle_time)
 
-        # Remove target from planning scene so Steps 2 and 2b can plan freely.
-        # Kept in scene during Step 1 so OMPL avoids physically hitting it in Gazebo.
-        if self._use_collision_scene:
-            try:
-                self._arm.remove_collision_object(id=target_co_id)
-                self.get_logger().info(f"[STEP 1→2] Removed '{target_co_id}' from planning scene.")
-            except Exception as e:
-                self.get_logger().warn(f"[STEP 1→2] Could not remove collision object (non-fatal): {e}")
-
         # ── Step 2/5: Cartesian approach (straight line along approach axis) ──
-        self._arm.max_velocity = self._approach_velocity
-        self._arm.max_acceleration = self._approach_acceleration
         self.get_logger().info(
             f"[STEP 2/5] CARTESIAN APPROACH → [{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}]"
             f"  (vel={self._approach_velocity})"
@@ -508,7 +521,8 @@ class GraspExecutorNode(Node):
         t0 = time.time()
         self._arm.move_to_pose(
             position=pos.tolist(), quat_xyzw=quat_xyzw,
-            cartesian=True, cartesian_max_step=0.005, cartesian_fraction_threshold=0.9,
+            cartesian=True, cartesian_max_step=self._cartesian_max_step_approach,
+            cartesian_fraction_threshold=self._cartesian_fraction_threshold,
         )
         ok = self._arm.wait_until_executed()
         dt = time.time() - t0
@@ -518,6 +532,7 @@ class GraspExecutorNode(Node):
             )
             self._arm.max_velocity = 0.5
             self._arm.max_acceleration = 0.5
+            self._restore_acm(target_co_id)
             return False
         self.get_logger().info(f"[STEP 2/5] Approach reached in {dt:.2f}s")
 
@@ -528,16 +543,18 @@ class GraspExecutorNode(Node):
         t0 = time.time()
         self._arm.move_to_pose(
             position=contact_pos.tolist(), quat_xyzw=quat_xyzw,
-            cartesian=True, cartesian_max_step=0.002, cartesian_fraction_threshold=0.9,
+            cartesian=True, cartesian_max_step=self._cartesian_max_step_micro,
+            cartesian_fraction_threshold=self._cartesian_fraction_threshold,
         )
         ok = self._arm.wait_until_executed()
-        self._arm.max_velocity = 0.5
-        self._arm.max_acceleration = 0.5
         dt = time.time() - t0
         if not ok:
             self.get_logger().warn(
                 f"[STEP 2b] MICRO-ADVANCE FAILED in {dt:.2f}s — aborting this candidate"
             )
+            self._arm.max_velocity = 0.5
+            self._arm.max_acceleration = 0.5
+            self._restore_acm(target_co_id)
             return False
         self.get_logger().info(f"[STEP 2b] Contact position reached in {dt:.2f}s")
 
@@ -562,30 +579,60 @@ class GraspExecutorNode(Node):
                 f"[STEP 3/5] Gripper fully closed (gap={finger_gap*1000:.1f}mm) — "
                 "no object grasped, aborting"
             )
+            self._arm.max_velocity = 0.5
+            self._arm.max_acceleration = 0.5
+            self._restore_acm(target_co_id)
             return False
         self.get_logger().info(
             f"[STEP 3/5] Object confirmed between fingers (gap={finger_gap*1000:.1f}mm/side)"
         )
 
+        # ── Step 3b: attach collision object to gripper for collision-aware lift ─
+        if self._use_collision_scene:
+            try:
+                self._arm.attach_collision_object(
+                    id=target_co_id,
+                    link_name='panda_hand_tcp',
+                    touch_links=list(self._acm_allowed_links),
+                    weight=self._attach_weight,
+                )
+                self.get_logger().info(f"[STEP 3b] Attached '{target_co_id}' to panda_hand_tcp")
+            except Exception as e:
+                self.get_logger().warn(f"[STEP 3b] Attach failed (non-fatal): {e}")
+
         # ── Step 4/5: Cartesian lift (straight +Z from grasp position) ────────
         # Cartesian path prevents the STATUS_ABORTED that occurs when joint-space
         # planning cannot find an IK solution from the extended grasp configuration.
+        self._arm.max_velocity = self._lift_velocity
+        self._arm.max_acceleration = self._lift_acceleration
         self.get_logger().info(
             f"[STEP 4/5] CARTESIAN LIFT → [{lift_pos[0]:.3f}, {lift_pos[1]:.3f}, {lift_pos[2]:.3f}]"
         )
         t0 = time.time()
         self._arm.move_to_pose(
             position=lift_pos, quat_xyzw=quat_xyzw,
-            cartesian=True, cartesian_max_step=0.005, cartesian_fraction_threshold=0.9,
+            cartesian=True, cartesian_max_step=self._cartesian_max_step_approach,
+            cartesian_fraction_threshold=self._cartesian_fraction_threshold,
         )
         ok = self._arm.wait_until_executed()
         dt = time.time() - t0
         if not ok:
             self.get_logger().warn(f"[STEP 4/5] LIFT FAILED in {dt:.2f}s")
+            self._arm.max_velocity = 0.5
+            self._arm.max_acceleration = 0.5
+            if self._use_collision_scene:
+                try:
+                    self._arm.detach_collision_object(id=target_co_id)
+                    self._arm.remove_collision_object(id=target_co_id)
+                except Exception as e:
+                    self.get_logger().warn(f"[STEP 4 fail] Detach failed: {e}")
+                self._restore_acm(target_co_id)
             return False
         self.get_logger().info(f"[STEP 4/5] Object lifted in {dt:.2f}s")
 
         # ── Step 5/5: return to home (object secured, arm in safe config) ─────
+        self._arm.max_velocity = 0.5
+        self._arm.max_acceleration = 0.5
         self.get_logger().info("[STEP 5/5] MOVING TO HOME")
         t0 = time.time()
         self._arm.move_to_configuration(
@@ -598,6 +645,16 @@ class GraspExecutorNode(Node):
             self.get_logger().info(f"[STEP 5/5] Home reached in {dt:.2f}s")
         else:
             self.get_logger().warn(f"[STEP 5/5] Home failed in {dt:.2f}s (lift still succeeded)")
+
+        # ── Step 6: detach, remove collision object, restore ACM ──────────────
+        if self._use_collision_scene:
+            try:
+                self._arm.detach_collision_object(id=target_co_id)
+                self._arm.remove_collision_object(id=target_co_id)
+                self.get_logger().info(f"[STEP 6] Detached and removed '{target_co_id}'")
+            except Exception as e:
+                self.get_logger().warn(f"[STEP 6] Detach/remove failed (non-fatal): {e}")
+            self._restore_acm(target_co_id)
 
         return True  # lift succeeded — object was grasped and raised
 

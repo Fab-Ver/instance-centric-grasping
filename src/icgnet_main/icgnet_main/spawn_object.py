@@ -1,6 +1,7 @@
 import math
 import os
 import random
+import re
 import subprocess
 import time
 
@@ -8,6 +9,28 @@ import yaml
 import rclpy
 from ament_index_python.packages import get_package_share_directory
 from rclpy.node import Node
+
+
+def _half_height_from_sdf(sdf_path: str) -> float:
+    """Return half the vertical extent of the first collision geometry in the SDF, or 0.05."""
+    try:
+        with open(sdf_path) as f:
+            content = f.read()
+        # cylinder: half_height = length/2
+        m = re.search(r'<length>([\d.eE+-]+)</length>', content)
+        if m:
+            return float(m.group(1)) / 2.0
+        # box: half_height = z-dimension / 2
+        m = re.search(r'<size>([\d.eE+-]+)\s+([\d.eE+-]+)\s+([\d.eE+-]+)</size>', content)
+        if m:
+            return float(m.group(3)) / 2.0
+        # sphere: half_height = radius
+        m = re.search(r'<radius>([\d.eE+-]+)</radius>', content)
+        if m:
+            return float(m.group(1))
+    except Exception:
+        pass
+    return 0.05
 
 
 def _load_catalog(models_dir: str) -> dict:
@@ -22,10 +45,12 @@ class ObjectSpawner(Node):
         self.declare_parameter('target_type', '')
         self.declare_parameter('target_class', 'can')
         self.declare_parameter('num_objects', 1)
+        self.declare_parameter('table_z_top', 0.05)
 
         self.target_type = self.get_parameter('target_type').get_parameter_value().string_value.strip()
         self.target_class = self.get_parameter('target_class').get_parameter_value().string_value.strip()
         self.num_objects = self.get_parameter('num_objects').get_parameter_value().integer_value
+        self.table_z_top = self.get_parameter('table_z_top').get_parameter_value().double_value
 
         pkg_share = get_package_share_directory('icgnet_main')
         self.models_dir = os.path.join(pkg_share, 'models')
@@ -98,10 +123,14 @@ class ObjectSpawner(Node):
             model_sdf_direct = os.path.join(self.models_dir, model_name, 'model.sdf')
             matches = [model_sdf_direct] if os.path.isfile(model_sdf_direct) else []
 
+        sdf_path = matches[0] if matches else None
+        half_h = _half_height_from_sdf(sdf_path) if sdf_path else 0.05
+        spawn_z = self.table_z_top + half_h + 0.002
+
         cmd = [
             'ros2', 'run', 'gazebo_ros', 'spawn_entity.py',
             '-entity', entity_name,
-            '-x', f'{x:.3f}', '-y', f'{y:.3f}', '-z', '0.05',
+            '-x', f'{x:.3f}', '-y', f'{y:.3f}', '-z', f'{spawn_z:.4f}',
             '-Y', f'{yaw:.3f}',
         ]
 

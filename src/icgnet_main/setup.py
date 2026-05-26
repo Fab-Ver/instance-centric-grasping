@@ -45,6 +45,7 @@ setup(
             'grasp_executor = icgnet_main.grasp_executor:main',
             'save_inference = icgnet_main.save_inference:main',
             'replay_inference_node = icgnet_main.replay_inference_node:main',
+            'static_collision_publisher = icgnet_main.static_collision_publisher:main',
         ],
     },
 )
