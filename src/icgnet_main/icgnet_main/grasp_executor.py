@@ -458,10 +458,9 @@ class GraspExecutorNode(Node):
 
         target_co_id = f"{self._collision_id_prefix}{g.instance_id}"
 
-        # ── Step 0: collision-scene barrier + permissive ACM ──────────────────
+        # ── Step 0: collision-scene barrier ───────────────────────────────────
         if self._use_collision_scene:
-            self._arm.update_planning_scene()  # sync barrier: wait for CollisionObjects to be ingested
-            self._set_acm_permissive(target_co_id)
+            self._arm.update_planning_scene()
 
         # ── Step 1/5: pre-grasp (joint-space) ─────────────────────────────────
         self.get_logger().info(
@@ -477,6 +476,15 @@ class GraspExecutorNode(Node):
             )
             return False
         self.get_logger().info(f"[STEP 1/5] Pre-grasp reached in {dt:.2f}s")
+
+        # Remove target from planning scene so Steps 2 and 2b can plan freely.
+        # Kept in scene during Step 1 so OMPL avoids physically hitting it in Gazebo.
+        if self._use_collision_scene:
+            try:
+                self._arm.remove_collision_object(id=target_co_id)
+                self.get_logger().info(f"[STEP 1→2] Removed '{target_co_id}' from planning scene.")
+            except Exception as e:
+                self.get_logger().warn(f"[STEP 1→2] Could not remove collision object (non-fatal): {e}")
 
         # ── Step 2/5: Cartesian approach (straight line along approach axis) ──
         # Cartesian planning ensures TCP follows the approach axis exactly,
@@ -548,19 +556,6 @@ class GraspExecutorNode(Node):
             f"[STEP 3/5] Object confirmed between fingers (gap={finger_gap*1000:.1f}mm/side)"
         )
 
-        # ── Step 3b: attach collision object to TCP (post-grasp) ──────────────
-        if self._use_collision_scene:
-            try:
-                self._arm.attach_collision_object(
-                    id=target_co_id,
-                    link_name='panda_hand_tcp',
-                    touch_links=list(self._acm_allowed_links),
-                    weight=self._attach_weight,
-                )
-                self.get_logger().info(f"[STEP 3b] Attached '{target_co_id}' to panda_hand_tcp.")
-            except Exception as e:
-                self.get_logger().warn(f"[STEP 3b] Attach failed (non-fatal): {e}")
-
         # ── Step 4/5: Cartesian lift (straight +Z from grasp position) ────────
         # Cartesian path prevents the STATUS_ABORTED that occurs when joint-space
         # planning cannot find an IK solution from the extended grasp configuration.
@@ -592,16 +587,6 @@ class GraspExecutorNode(Node):
             self.get_logger().info(f"[STEP 5/5] Home reached in {dt:.2f}s")
         else:
             self.get_logger().warn(f"[STEP 5/5] Home failed in {dt:.2f}s (lift still succeeded)")
-
-        # ── Step 6: detach + remove collision object + restore ACM ───────────
-        if self._use_collision_scene:
-            try:
-                self._arm.detach_collision_object(id=target_co_id)
-                self._arm.remove_collision_object(id=target_co_id)
-                self.get_logger().info(f"[STEP 6] Detached and removed '{target_co_id}' from scene.")
-            except Exception as e:
-                self.get_logger().warn(f"[STEP 6] Detach/remove failed (non-fatal): {e}")
-            self._restore_acm(target_co_id)
 
         return True  # lift succeeded — object was grasped and raised
 
