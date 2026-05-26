@@ -6,6 +6,9 @@ grasp_executor_node:
     default_max_attempts: 5
     approach_offset: 0.10
     grasp_forward_offset: 0.04
+    approach_velocity: 0.05
+    approach_acceleration: 0.05
+    pregrasp_settle_time: 0.8
     lift_height: 0.25
     workspace_x_min: 0.20
     workspace_x_max: 0.80

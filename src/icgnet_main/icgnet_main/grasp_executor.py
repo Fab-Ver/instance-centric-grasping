@@ -62,6 +62,9 @@ class GraspExecutorNode(Node):
         self.declare_parameter('default_max_attempts', 5)
         self.declare_parameter('approach_offset', 0.10)
         self.declare_parameter('grasp_forward_offset', 0.04)
+        self.declare_parameter('approach_velocity', 0.05)
+        self.declare_parameter('approach_acceleration', 0.05)
+        self.declare_parameter('pregrasp_settle_time', 0.8)
         self.declare_parameter('lift_height', 0.25)
         self.declare_parameter('workspace_x_min', 0.20)
         self.declare_parameter('workspace_x_max', 0.80)
@@ -76,6 +79,9 @@ class GraspExecutorNode(Node):
 
         self._approach_offset = self.get_parameter('approach_offset').get_parameter_value().double_value
         self._grasp_forward_offset = self.get_parameter('grasp_forward_offset').get_parameter_value().double_value
+        self._approach_velocity = self.get_parameter('approach_velocity').get_parameter_value().double_value
+        self._approach_acceleration = self.get_parameter('approach_acceleration').get_parameter_value().double_value
+        self._pregrasp_settle_time = self.get_parameter('pregrasp_settle_time').get_parameter_value().double_value
         self._lift_height = self.get_parameter('lift_height').get_parameter_value().double_value
         self._default_min_score = self.get_parameter('default_min_score').get_parameter_value().double_value
         self._default_max_attempts = self.get_parameter('default_max_attempts').get_parameter_value().integer_value
@@ -318,11 +324,16 @@ class GraspExecutorNode(Node):
                 continue
             filtered.append(g)
 
-        self.get_logger().info(
-            f"[FILTER] total={n_total} → kept={len(filtered)} | "
-            f"rejected: score={n_score} width={n_width} workspace={n_ws} target={n_target}"
-        )
         filtered.sort(key=lambda g: g.score, reverse=True)
+        score_range = (
+            f"[{filtered[-1].score:.2f}–{filtered[0].score:.2f}]"
+            if filtered else "—"
+        )
+        self.get_logger().info(
+            f"[FILTER] total={n_total} → kept={len(filtered)} (min_score≥{min_score:.2f}, "
+            f"scores={score_range}) | "
+            f"rejected: score<threshold={n_score} width={n_width} workspace={n_ws} target={n_target}"
+        )
         return filtered
 
     def _matches_target(self, g, target: str) -> bool:
@@ -446,14 +457,14 @@ class GraspExecutorNode(Node):
         angle_deg = float(np.degrees(np.arccos(np.clip(-approach[2], -1.0, 1.0))))
 
         self.get_logger().info(
-            f"[PLAN] icgnet_tcp  = [{pos[0]:.4f}, {pos[1]:.4f}, {pos[2]:.4f}]\n"
+            f"[PLAN] score={g.score:.3f}  inst={g.instance_id}  cls={g.semantic_class}  width={g.width:.4f}m\n"
+            f"       icgnet_tcp  = [{pos[0]:.4f}, {pos[1]:.4f}, {pos[2]:.4f}]\n"
             f"       contact_pos = [{contact_pos[0]:.4f}, {contact_pos[1]:.4f}, {contact_pos[2]:.4f}]"
             f"  (forward_offset={self._grasp_forward_offset*100:.0f}cm)\n"
             f"       pre_pos     = [{pre_pos[0]:.4f}, {pre_pos[1]:.4f}, {pre_pos[2]:.4f}]\n"
             f"       lift_pos    = [{lift_pos[0]:.4f}, {lift_pos[1]:.4f}, {lift_pos[2]:.4f}]\n"
             f"       approach    = [{approach[0]:.4f}, {approach[1]:.4f}, {approach[2]:.4f}]"
-            f"  ({angle_deg:.1f}° from vertical)\n"
-            f"       width       = {g.width:.4f} m"
+            f"  ({angle_deg:.1f}° from vertical)"
         )
 
         target_co_id = f"{self._collision_id_prefix}{g.instance_id}"
@@ -476,6 +487,7 @@ class GraspExecutorNode(Node):
             )
             return False
         self.get_logger().info(f"[STEP 1/5] Pre-grasp reached in {dt:.2f}s")
+        time.sleep(self._pregrasp_settle_time)
 
         # Remove target from planning scene so Steps 2 and 2b can plan freely.
         # Kept in scene during Step 1 so OMPL avoids physically hitting it in Gazebo.
@@ -487,12 +499,11 @@ class GraspExecutorNode(Node):
                 self.get_logger().warn(f"[STEP 1→2] Could not remove collision object (non-fatal): {e}")
 
         # ── Step 2/5: Cartesian approach (straight line along approach axis) ──
-        # Cartesian planning ensures TCP follows the approach axis exactly,
-        # avoiding the object-sweep artefact of joint-space planning.
-        self._arm.max_velocity = 0.1
-        self._arm.max_acceleration = 0.1
+        self._arm.max_velocity = self._approach_velocity
+        self._arm.max_acceleration = self._approach_acceleration
         self.get_logger().info(
             f"[STEP 2/5] CARTESIAN APPROACH → [{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}]"
+            f"  (vel={self._approach_velocity})"
         )
         t0 = time.time()
         self._arm.move_to_pose(
