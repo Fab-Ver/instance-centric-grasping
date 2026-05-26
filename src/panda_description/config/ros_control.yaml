@@ -37,7 +37,7 @@ panda_arm_controller:
       panda_joint7: {p: 10.0,    i: 0.5, d: 0.1,   i_clamp: 0.0, ff_velocity_scale: 1.0}
     constraints:
       stopped_velocity_tolerance: 0.2
-      goal_time: 20.0
+      goal_time: 10.0
       panda_joint1: {goal: 0.15}
       panda_joint2: {goal: 0.15}
       panda_joint3: {goal: 0.15}

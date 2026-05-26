@@ -1,0 +1,14 @@
+{
+  "n_grasps": 744,
+  "n_collision_objects": 1,
+  "collision_object_ids": [
+    "icgnet_inst_0"
+  ],
+  "object_name": "target_obj",
+  "object_sdf_path": "/home/alber/Robotics_Project/instance-centric-grasping/install/icgnet_main/share/icgnet_main/models/can/beer_can/model.sdf",
+  "object_pose": {
+    "x": 0.65,
+    "y": 0.0,
+    "z": 0.05
+  }
+}

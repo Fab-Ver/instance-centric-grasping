@@ -43,6 +43,8 @@ setup(
             'spawn_object = icgnet_main.spawn_object:main',
             'spawn_one_entity = icgnet_main.spawn_one_entity:main',
             'grasp_executor = icgnet_main.grasp_executor:main',
+            'save_inference = icgnet_main.save_inference:main',
+            'replay_inference_node = icgnet_main.replay_inference_node:main',
         ],
     },
 )
