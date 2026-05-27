@@ -24,7 +24,7 @@ def generate_launch_description():
             PythonLaunchDescriptionSource(
                 os.path.join(pkg_panda_gazebo, 'gazebo.launch.py')
             ),
-            launch_arguments={'world': world_path}.items(),
+            launch_arguments={'world': world_path, 'use_sim_time': 'true'}.items(),
         ),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
@@ -38,12 +38,14 @@ def generate_launch_description():
             package='tf2_ros',
             executable='static_transform_publisher',
             arguments=['0.97', '0', '0.616', '3.14159', '1.0', '0', 'world', 'camera_link'],
+            parameters=[{'use_sim_time': True}],
         ),
         # TF: ROS optical frame convention
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
             arguments=['0', '0', '0', '-1.5708', '0', '-1.5708', 'camera_link', 'camera_link_optical'],
+            parameters=[{'use_sim_time': True}],
         ),
         # TABLE DISABLED — uncomment to re-enable with the table in icgnet_world.world
         # Node(

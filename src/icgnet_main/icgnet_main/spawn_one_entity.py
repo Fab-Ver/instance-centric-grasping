@@ -1,6 +1,5 @@
 import sys
 import subprocess
-import os
 
 def main():
     if len(sys.argv) < 3:

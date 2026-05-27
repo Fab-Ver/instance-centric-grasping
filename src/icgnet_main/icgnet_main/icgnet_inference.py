@@ -4,7 +4,9 @@ from typing import Any
 
 import numpy as np
 import torch
-from loguru import logger
+from rclpy.logging import get_logger
+
+_logger = get_logger('icgnet_predictor')
 
 
 class ICGNetPredictor:
@@ -22,20 +24,20 @@ class ICGNetPredictor:
             abs_repo_path = os.path.abspath(icgnet_repo_path)
             if abs_repo_path not in sys.path:
                 sys.path.insert(0, abs_repo_path)
-                logger.info(f"Added {abs_repo_path} to sys.path")
+                _logger.info(f"Added {abs_repo_path} to sys.path")
 
         try:
             from icg_net import get_model
-            logger.info(f"Loading model from: {config_path}")
+            _logger.info(f"Loading model from: {config_path}")
             self.model = get_model(config_path, device=self.device)
             self.model.eval()
-            logger.success(f"ICGNet loaded successfully on {self.device}")
+            _logger.info(f"ICGNet loaded successfully on {self.device}")
         except ImportError as e:
-            logger.error(f"Failed to import 'icg_net': {e}")
-            logger.error("Make sure icg_net is cloned and icgnet_repo_path is correct.")
+            _logger.error(f"Failed to import 'icg_net': {e}")
+            _logger.error("Make sure icg_net is cloned and icgnet_repo_path is correct.")
             raise
         except Exception as e:
-            logger.error(f"Error loading model: {e}")
+            _logger.error(f"Error loading model: {e}")
             raise
 
     def predict(
@@ -60,7 +62,7 @@ class ICGNetPredictor:
 
         pts_t, nrm_t = to_torch_tensors(points, normals, device=self.device)
 
-        logger.info(f"Running inference on {pts_t.shape[0]} points (return_meshes={return_meshes})...")
+        _logger.info(f"Running inference on {pts_t.shape[0]} points (return_meshes={return_meshes})...")
 
         with torch.no_grad():
             output = self.model(
@@ -75,6 +77,6 @@ class ICGNetPredictor:
             )
 
         if return_meshes:
-            logger.info(f"Reconstructed {len(output.reconstructions)} instance mesh(es).")
-        logger.success("Inference complete.")
+            _logger.info(f"Reconstructed {len(output.reconstructions)} instance mesh(es).")
+        _logger.info("Inference complete.")
         return output

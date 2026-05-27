@@ -30,8 +30,8 @@ setup(
     ] + collect_model_files(),
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='burger',
-    maintainer_email='burger@todo.todo',
+    maintainer='Fabio Veroli',
+    maintainer_email='',
     description='ICGNet main package — inference, grasp execution, Gazebo integration',
     license='TODO: License declaration',
     extras_require={'test': ['pytest']},
@@ -39,7 +39,6 @@ setup(
         'console_scripts': [
             'grasp_service_node = icgnet_main.grasp_service_node:main',
             'test_move_to_pose = icgnet_main.test_move_to_pose:main',
-            'direct_jtc_test = icgnet_main.direct_jtc_test:main',
             'spawn_object = icgnet_main.spawn_object:main',
             'spawn_one_entity = icgnet_main.spawn_one_entity:main',
             'grasp_executor = icgnet_main.grasp_executor:main',

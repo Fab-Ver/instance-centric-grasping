@@ -6,7 +6,9 @@ import rclpy
 import rclpy.duration
 from gazebo_msgs.srv import SetEntityState
 from geometry_msgs.msg import Point
-from moveit_msgs.msg import AllowedCollisionEntry, AllowedCollisionMatrix, PlanningScene
+from moveit_msgs.msg import (
+    AllowedCollisionEntry, AllowedCollisionMatrix, PlanningScene, PlanningSceneComponents,
+)
 from moveit_msgs.srv import ApplyPlanningScene, GetPlanningScene
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
@@ -80,7 +82,7 @@ class GraspExecutorNode(Node):
         self._object_init_x = self.get_parameter('object_init_x').get_parameter_value().double_value
         self._object_init_y = self.get_parameter('object_init_y').get_parameter_value().double_value
         self._object_init_z = self.get_parameter('object_init_z').get_parameter_value().double_value
-        self._ws = {
+        self._workspace_bounds = {
             'x': (self.get_parameter('workspace_x_min').get_parameter_value().double_value,
                   self.get_parameter('workspace_x_max').get_parameter_value().double_value),
             'y': (self.get_parameter('workspace_y_min').get_parameter_value().double_value,
@@ -166,6 +168,8 @@ class GraspExecutorNode(Node):
             GetPlanningScene, '/get_planning_scene', callback_group=cb_svc
         )
 
+        self._saved_acm: AllowedCollisionMatrix | None = None
+
         self.create_service(ExecuteGrasp, '/icgnet/execute_grasp', self._execute_grasp_cb, callback_group=cb_grasp_exec)
 
         self.get_logger().info('GraspExecutorNode ready.')
@@ -199,9 +203,9 @@ class GraspExecutorNode(Node):
             req.state.pose.orientation.w = 1.0
             req.state.reference_frame = 'world'
             fut = self._set_entity_client.call_async(req)
-            while not fut.done():
-                time.sleep(0.05)
-            if fut.result().success:
+            if not self._wait_for_future(fut):
+                self.get_logger().warn('[RESET] Object reset timed out.')
+            elif fut.result().success:
                 self.get_logger().info(
                     f'[RESET] Object "{self._object_entity_name}" reset to '
                     f'[{self._object_init_x}, {self._object_init_y}, {self._object_init_z}]'
@@ -230,8 +234,10 @@ class GraspExecutorNode(Node):
             return res
 
         future = self._compute_client.call_async(Trigger.Request())
-        while not future.done():
-            time.sleep(0.05)
+        if not self._wait_for_future(future):
+            res.success = False
+            res.message = "ICGNet inference timed out"
+            return res
         if not future.result().success:
             res.success = False
             res.message = f"ICGNet inference failed: {future.result().message}"
@@ -319,9 +325,9 @@ class GraspExecutorNode(Node):
             if g.width > self._max_grasp_width:
                 n_width += 1
                 continue
-            if not (self._ws['x'][0] <= p.x <= self._ws['x'][1] and
-                    self._ws['y'][0] <= p.y <= self._ws['y'][1] and
-                    self._ws['z'][0] <= p.z <= self._ws['z'][1]):
+            if not (self._workspace_bounds['x'][0] <= p.x <= self._workspace_bounds['x'][1] and
+                    self._workspace_bounds['y'][0] <= p.y <= self._workspace_bounds['y'][1] and
+                    self._workspace_bounds['z'][0] <= p.z <= self._workspace_bounds['z'][1]):
                 n_ws += 1
                 continue
             if not self._matches_target(g, target):
@@ -406,49 +412,74 @@ class GraspExecutorNode(Node):
             time.sleep(0.02)
         return True
 
+    def _get_current_acm(self) -> AllowedCollisionMatrix | None:
+        if not self._get_scene_client.wait_for_service(timeout_sec=2.0):
+            self.get_logger().warn("GetPlanningScene not available.")
+            return None
+        req = GetPlanningScene.Request()
+        req.components.components = PlanningSceneComponents.ALLOWED_COLLISION_MATRIX
+        fut = self._get_scene_client.call_async(req)
+        if not self._wait_for_future(fut):
+            self.get_logger().warn("GetPlanningScene timed out.")
+            return None
+        return fut.result().scene.allowed_collision_matrix
+
+    def _apply_acm(self, acm: AllowedCollisionMatrix):
+        if not self._apply_scene_client.wait_for_service(timeout_sec=2.0):
+            self.get_logger().warn("ApplyPlanningScene not available.")
+            return
+        diff = PlanningScene(is_diff=True)
+        diff.allowed_collision_matrix = acm
+        fut = self._apply_scene_client.call_async(ApplyPlanningScene.Request(scene=diff))
+        if not self._wait_for_future(fut):
+            self.get_logger().warn("ApplyPlanningScene timed out.")
+
     def _set_acm_permissive(self, target_co_id: str):
         """Allow finger links to contact the target collision object during approach."""
         if not self._use_collision_scene:
             return
-        if not self._apply_scene_client.wait_for_service(timeout_sec=2.0):
-            self.get_logger().warn("ApplyPlanningScene not available, skipping ACM update.")
-            return
 
-        diff = PlanningScene(is_diff=True)
-        acm = AllowedCollisionMatrix()
-        links = list(self._acm_allowed_links) + [target_co_id]
-        acm.entry_names = links
-        # Allow all pairs between finger links and the target collision object
-        for _ in links:
+        acm = self._get_current_acm()
+        if acm is None:
+            return
+        self._saved_acm = acm
+
+        names = list(acm.entry_names)
+        values = [list(ev.enabled) for ev in acm.entry_values]
+
+        for link in list(self._acm_allowed_links) + [target_co_id]:
+            if link not in names:
+                for row in values:
+                    row.append(False)
+                names.append(link)
+                values.append([False] * len(names))
+
+        for link in self._acm_allowed_links:
+            i, j = names.index(link), names.index(target_co_id)
+            values[i][j] = True
+            values[j][i] = True
+
+        new_acm = AllowedCollisionMatrix()
+        new_acm.entry_names = names
+        for row in values:
             entry = AllowedCollisionEntry()
-            entry.enabled = [True] * len(links)
-            acm.entry_values.append(entry)
-        diff.allowed_collision_matrix = acm
-        req = ApplyPlanningScene.Request(scene=diff)
-        fut = self._apply_scene_client.call_async(req)
-        if not self._wait_for_future(fut):
-            self.get_logger().warn("ACM permissive update timed out.")
+            entry.enabled = row
+            new_acm.entry_values.append(entry)
+
+        self._apply_acm(new_acm)
 
     def _restore_acm(self, target_co_id: str):
-        """Restore strict ACM by removing the temporary allowed entries."""
-        if not self._use_collision_scene:
+        """Restore ACM to state before _set_acm_permissive."""
+        if not self._use_collision_scene or self._saved_acm is None:
             return
-        if not self._apply_scene_client.wait_for_service(timeout_sec=2.0):
-            return
+        self._apply_acm(self._saved_acm)
+        self._saved_acm = None
 
-        diff = PlanningScene(is_diff=True)
-        acm = AllowedCollisionMatrix()
-        links = list(self._acm_allowed_links) + [target_co_id]
-        acm.entry_names = links
-        for _ in links:
-            entry = AllowedCollisionEntry()
-            entry.enabled = [False] * len(links)
-            acm.entry_values.append(entry)
-        diff.allowed_collision_matrix = acm
-        req = ApplyPlanningScene.Request(scene=diff)
-        fut = self._apply_scene_client.call_async(req)
-        if not self._wait_for_future(fut):
-            self.get_logger().warn("ACM restore update timed out.")
+    def _abort_grasp(self, target_co_id: str) -> bool:
+        self._arm.max_velocity = self._arm_default_velocity
+        self._arm.max_acceleration = self._arm_default_acceleration
+        self._restore_acm(target_co_id)
+        return False
 
     def _execute_single_grasp(self, g) -> bool:
         pos = np.array([g.pose.position.x, g.pose.position.y, g.pose.position.z])
@@ -499,10 +530,7 @@ class GraspExecutorNode(Node):
             self.get_logger().warn(
                 f"[STEP 1/5] PRE-GRASP FAILED in {dt:.2f}s — aborting this candidate"
             )
-            self._arm.max_velocity = self._arm_default_velocity
-            self._arm.max_acceleration = self._arm_default_acceleration
-            self._restore_acm(target_co_id)
-            return False
+            return self._abort_grasp(target_co_id)
         self.get_logger().info(f"[STEP 1/5] Pre-grasp reached in {dt:.2f}s")
         time.sleep(self._pregrasp_settle_time)
 
@@ -523,10 +551,7 @@ class GraspExecutorNode(Node):
             self.get_logger().warn(
                 f"[STEP 2/5] APPROACH FAILED in {dt:.2f}s — aborting this candidate"
             )
-            self._arm.max_velocity = self._arm_default_velocity
-            self._arm.max_acceleration = self._arm_default_acceleration
-            self._restore_acm(target_co_id)
-            return False
+            return self._abort_grasp(target_co_id)
         self.get_logger().info(f"[STEP 2/5] Approach reached in {dt:.2f}s")
 
         # ── Step 2b: micro-advance to contact position ────────────────────────
@@ -545,10 +570,7 @@ class GraspExecutorNode(Node):
             self.get_logger().warn(
                 f"[STEP 2b] MICRO-ADVANCE FAILED in {dt:.2f}s — aborting this candidate"
             )
-            self._arm.max_velocity = self._arm_default_velocity
-            self._arm.max_acceleration = self._arm_default_acceleration
-            self._restore_acm(target_co_id)
-            return False
+            return self._abort_grasp(target_co_id)
         self.get_logger().info(f"[STEP 2b] Contact position reached in {dt:.2f}s")
 
         # ── Step 3/5: close gripper + verify grasp ────────────────────────────
@@ -572,10 +594,7 @@ class GraspExecutorNode(Node):
                 f"[STEP 3/5] Gripper fully closed (gap={finger_gap*1000:.1f}mm) — "
                 "no object grasped, aborting"
             )
-            self._arm.max_velocity = self._arm_default_velocity
-            self._arm.max_acceleration = self._arm_default_acceleration
-            self._restore_acm(target_co_id)
-            return False
+            return self._abort_grasp(target_co_id)
         self.get_logger().info(
             f"[STEP 3/5] Object confirmed between fingers (gap={finger_gap*1000:.1f}mm/side)"
         )
@@ -611,16 +630,13 @@ class GraspExecutorNode(Node):
         dt = time.time() - t0
         if not ok:
             self.get_logger().warn(f"[STEP 4/5] LIFT FAILED in {dt:.2f}s")
-            self._arm.max_velocity = self._arm_default_velocity
-            self._arm.max_acceleration = self._arm_default_acceleration
             if self._use_collision_scene:
                 try:
                     self._arm.detach_collision_object(id=target_co_id)
                     self._arm.remove_collision_object(id=target_co_id)
                 except Exception as e:
                     self.get_logger().warn(f"[STEP 4 fail] Detach failed: {e}")
-                self._restore_acm(target_co_id)
-            return False
+            return self._abort_grasp(target_co_id)
         self.get_logger().info(f"[STEP 4/5] Object lifted in {dt:.2f}s")
 
         # ── Step 5/5: return to home (object secured, arm in safe config) ─────

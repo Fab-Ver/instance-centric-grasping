@@ -1,5 +1,3 @@
-import time
-
 import rclpy
 from geometry_msgs.msg import Pose
 from moveit_msgs.msg import CollisionObject
@@ -31,7 +29,7 @@ class StaticCollisionPublisher(Node):
         self._pub = self.create_publisher(CollisionObject, '/collision_object', qos)
 
         delay = self.get_parameter('startup_delay').get_parameter_value().double_value
-        self.create_timer(delay, self._publish_once)
+        self._timer = self.create_timer(delay, self._publish_once)
 
     def _publish_once(self):
         co = CollisionObject()
@@ -58,6 +56,7 @@ class StaticCollisionPublisher(Node):
 
         self._pub.publish(co)
         self.get_logger().info("Published 'grasp_table' CollisionObject to MoveIt2 planning scene.")
+        self._timer.cancel()
 
 
 def main(args=None):

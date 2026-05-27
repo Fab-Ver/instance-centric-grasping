@@ -14,7 +14,7 @@ def _load_yaml(package_share: str, rel_path: str) -> dict:
 
 
 def generate_launch_description():
-    use_sim_time = LaunchConfiguration('use_sim_time', default='false')
+    use_sim_time = LaunchConfiguration('use_sim_time')
 
     pkg_icgnet = get_package_share_directory('icgnet_main')
     pkg_panda  = get_package_share_directory('panda_description')

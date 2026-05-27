@@ -26,7 +26,7 @@ def generate_launch_description():
         executable='grasp_service_node',
         name='icgnet_grasp_node',
         output='screen',
-        parameters=[params_file],
+        parameters=[params_file, {'use_sim_time': True}],
     )
 
     return LaunchDescription([grasp_node])

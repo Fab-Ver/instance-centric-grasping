@@ -17,29 +17,20 @@ from std_msgs.msg import ColorRGBA, Header
 from std_srvs.srv import Trigger
 from visualization_msgs.msg import Marker, MarkerArray
 
-try:
-    from icgnet_msgs.msg import Grasp, GraspArray
-    _ICGNET_MSGS_AVAILABLE = True
-except ImportError:
-    _ICGNET_MSGS_AVAILABLE = False
+from icgnet_msgs.msg import Grasp, GraspArray
 
-try:
-    from .icgnet_inference import ICGNetPredictor
-    from .pointcloud_utils import (
-        PointCloudConfig, gripper_keypoints_world, pointcloud2_to_numpy, process_point_cloud,
-    )
-except ImportError:
-    import sys
-    sys.path.append(os.path.dirname(__file__))
-    from icgnet_inference import ICGNetPredictor
-    from pointcloud_utils import (
-        PointCloudConfig, gripper_keypoints_world, pointcloud2_to_numpy, process_point_cloud,
-    )
+from .icgnet_inference import ICGNetPredictor
+from .pointcloud_utils import (
+    PointCloudConfig, gripper_keypoints_world, pointcloud2_to_numpy, process_point_cloud,
+)
+
+
+SCORE_HUE_GREEN = 0.33
+MIN_POINTS_FOR_INFERENCE = 50
 
 
 def _score_to_color(score: float) -> ColorRGBA:
-    """Map score [0,1] to HSV color: red=low, green=high."""
-    h = max(0.0, min(1.0, score)) * 0.33
+    h = max(0.0, min(1.0, score)) * SCORE_HUE_GREEN
     r, g, b = colorsys.hsv_to_rgb(h, 1.0, 1.0)
     return ColorRGBA(r=float(r), g=float(g), b=float(b), a=0.9)
 
@@ -201,10 +192,7 @@ class ICGNetGraspNode(Node):
         self.preprocessed_cloud_pub = self.create_publisher(
             PointCloud2, '/icgnet/preprocessed_cloud', 10
         )
-        self.rich_pub = (
-            self.create_publisher(GraspArray, '/icgnet/grasps_rich', 10)
-            if _ICGNET_MSGS_AVAILABLE else None
-        )
+        self.rich_pub = self.create_publisher(GraspArray, '/icgnet/grasps_rich', 10)
 
         # ── Collision object publisher (MoveIt2 planning scene) ──────────────
         self._publish_co = self.get_parameter('publish_collision_objects').get_parameter_value().bool_value
@@ -372,7 +360,7 @@ class ICGNetGraspNode(Node):
             camera_position=camera_pos_world,
             workspace_bounds=self.workspace_bounds,
         )
-        if pts.shape[0] < 50:
+        if pts.shape[0] < MIN_POINTS_FOR_INFERENCE:
             raise RuntimeError(f"Too few points after preprocessing: {pts.shape[0]}")
 
         self.get_logger().info(f"Preprocessing: {raw_points.shape[0]} → {pts.shape[0]} points")
@@ -409,24 +397,24 @@ class ICGNetGraspNode(Node):
         n_total = len(centers)
 
         mask = scores >= self.score_threshold
-        rot_f     = rot_matrices[mask]
-        centers_f = centers[mask]
-        scores_f  = scores[mask]
-        widths_f  = widths[mask]
-        inst_f    = inst_ids[mask]
-        cls_f     = sem_class_raw[mask]
+        rot_filtered     = rot_matrices[mask]
+        centers_filtered = centers[mask]
+        scores_filtered  = scores[mask]
+        widths_filtered  = widths[mask]
+        inst_filtered    = inst_ids[mask]
+        cls_filtered     = sem_class_raw[mask]
 
         now = self.get_clock().now().to_msg()
 
         pose_array = PoseArray()
         pose_array.header.frame_id = self.target_frame
         pose_array.header.stamp = now
-        for i in range(len(centers_f)):
+        for i in range(len(centers_filtered)):
             p = Pose()
-            p.position.x = float(centers_f[i, 0])
-            p.position.y = float(centers_f[i, 1])
-            p.position.z = float(centers_f[i, 2])
-            quat = Rotation.from_matrix(rot_f[i]).as_quat()
+            p.position.x = float(centers_filtered[i, 0])
+            p.position.y = float(centers_filtered[i, 1])
+            p.position.z = float(centers_filtered[i, 2])
+            quat = Rotation.from_matrix(rot_filtered[i]).as_quat()
             p.orientation.x = float(quat[0])
             p.orientation.y = float(quat[1])
             p.orientation.z = float(quat[2])
@@ -434,22 +422,24 @@ class ICGNetGraspNode(Node):
             pose_array.poses.append(p)
         self.grasp_pub.publish(pose_array)
 
-        marker_array = _build_grasp_markers(centers_f, rot_f, scores_f, widths_f, self.target_frame, now)
+        marker_array = _build_grasp_markers(
+            centers_filtered, rot_filtered, scores_filtered, widths_filtered,
+            self.target_frame, now,
+        )
         self.marker_pub.publish(marker_array)
 
-        if self.rich_pub is not None:
-            ga = GraspArray()
-            ga.header.frame_id = self.target_frame
-            ga.header.stamp = now
-            for i in range(len(centers_f)):
-                g = Grasp()
-                g.pose = pose_array.poses[i]
-                g.score = float(scores_f[i])
-                g.width = float(widths_f[i])
-                g.instance_id = int(inst_f[i])
-                g.semantic_class = int(cls_f[i])
-                ga.grasps.append(g)
-            self.rich_pub.publish(ga)
+        ga = GraspArray()
+        ga.header.frame_id = self.target_frame
+        ga.header.stamp = now
+        for i in range(len(centers_filtered)):
+            g = Grasp()
+            g.pose = pose_array.poses[i]
+            g.score = float(scores_filtered[i])
+            g.width = float(widths_filtered[i])
+            g.instance_id = int(inst_filtered[i])
+            g.semantic_class = int(cls_filtered[i])
+            ga.grasps.append(g)
+        self.rich_pub.publish(ga)
 
         if self._publish_co and do_meshes and output.reconstructions:
             self._publish_collision_objects_from_reconstructions(output.reconstructions, self.target_frame)
