@@ -1,11 +1,14 @@
 import sys
 import os
-import torch
+from typing import Any
+
 import numpy as np
+import torch
 from loguru import logger
 
+
 class ICGNetPredictor:
-    def __init__(self, config_path, icgnet_repo_path=None, device='cuda'):
+    def __init__(self, config_path: str, icgnet_repo_path: str | None = None, device: str = 'cuda') -> None:
         """
         Load ICGNet model from checkpoint.
 
@@ -35,7 +38,13 @@ class ICGNetPredictor:
             logger.error(f"Error loading model: {e}")
             raise
 
-    def predict(self, points, normals, n_grasps=64, return_meshes=False):
+    def predict(
+        self,
+        points: np.ndarray,
+        normals: np.ndarray,
+        n_grasps: int = 64,
+        return_meshes: bool = False,
+    ) -> Any:
         """
         Run inference on the given point cloud.
 
@@ -69,8 +78,3 @@ class ICGNetPredictor:
             logger.info(f"Reconstructed {len(output.reconstructions)} instance mesh(es).")
         logger.success("Inference complete.")
         return output
-
-    def get_grasps_as_poses(self, output):
-        """Return raw scene_grasp_poses from ModelPredOut."""
-        # Grasps are already in world frame — TF transform is done in grasp_service_node.
-        return output.scene_grasp_poses

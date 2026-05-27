@@ -62,3 +62,16 @@ icgnet_grasp_node:
 
     # Prefix for collision object IDs. Executor uses this to attach/detach by ID.
     collision_id_prefix: "icgnet_inst_"
+
+    # ── Pointcloud preprocessing ──────────────────────────────────────────────
+    # Statistical outlier removal: number of neighbours to examine per point.
+    pc_nb_neighbors: 20
+
+    # Statistical outlier removal: points beyond this many std-devs are removed.
+    pc_std_ratio: 2.0
+
+    # Normal estimation search radius = voxel_size * pc_normal_radius_factor.
+    pc_normal_radius_factor: 5.0
+
+    # Normal estimation maximum neighbours within the search radius.
+    pc_normal_max_nn: 30

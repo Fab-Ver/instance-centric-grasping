@@ -1,3 +1,4 @@
+import glob
 import math
 import os
 import random
@@ -46,11 +47,25 @@ class ObjectSpawner(Node):
         self.declare_parameter('target_class', 'can')
         self.declare_parameter('num_objects', 1)
         self.declare_parameter('table_z_top', 0.05)
+        self.declare_parameter('spawn_x_min', 0.40)
+        self.declare_parameter('spawn_x_max', 0.80)
+        self.declare_parameter('spawn_y_min', -0.30)
+        self.declare_parameter('spawn_y_max', 0.30)
+        self.declare_parameter('spawn_reach_max', 0.85)
+        self.declare_parameter('spawn_reach_min', 0.30)
+        self.declare_parameter('spawn_min_dist', 0.18)
 
         self.target_type = self.get_parameter('target_type').get_parameter_value().string_value.strip()
         self.target_class = self.get_parameter('target_class').get_parameter_value().string_value.strip()
         self.num_objects = self.get_parameter('num_objects').get_parameter_value().integer_value
         self.table_z_top = self.get_parameter('table_z_top').get_parameter_value().double_value
+        self._spawn_x_min = self.get_parameter('spawn_x_min').get_parameter_value().double_value
+        self._spawn_x_max = self.get_parameter('spawn_x_max').get_parameter_value().double_value
+        self._spawn_y_min = self.get_parameter('spawn_y_min').get_parameter_value().double_value
+        self._spawn_y_max = self.get_parameter('spawn_y_max').get_parameter_value().double_value
+        self._spawn_reach_max = self.get_parameter('spawn_reach_max').get_parameter_value().double_value
+        self._spawn_reach_min = self.get_parameter('spawn_reach_min').get_parameter_value().double_value
+        self._spawn_min_dist = self.get_parameter('spawn_min_dist').get_parameter_value().double_value
 
         pkg_share = get_package_share_directory('icgnet_main')
         self.models_dir = os.path.join(pkg_share, 'models')
@@ -77,13 +92,15 @@ class ObjectSpawner(Node):
         self.get_logger().info(f'Total objects: {self.num_objects}')
         self.get_logger().info('==========================================')
 
-    def _get_random_pose(self, existing_poses, min_dist=0.18):
+    def _get_random_pose(self, existing_poses: list) -> tuple[float | None, float | None]:
         for _ in range(500):
-            x = random.uniform(0.40, 0.80)
-            y = random.uniform(-0.30, 0.30)
-            if math.sqrt(x**2 + y**2) > 0.85 or math.sqrt(x**2 + y**2) < 0.30:
+            x = random.uniform(self._spawn_x_min, self._spawn_x_max)
+            y = random.uniform(self._spawn_y_min, self._spawn_y_max)
+            reach = math.sqrt(x**2 + y**2)
+            if reach > self._spawn_reach_max or reach < self._spawn_reach_min:
                 continue
-            if all(math.sqrt((x - ex)**2 + (y - ey)**2) >= min_dist for ex, ey in existing_poses):
+            if all(math.sqrt((x - ex)**2 + (y - ey)**2) >= self._spawn_min_dist
+                   for ex, ey in existing_poses):
                 return x, y
         return None, None
 
@@ -116,8 +133,7 @@ class ObjectSpawner(Node):
         yaw = random.uniform(0, 2 * math.pi)
 
         model_sdf = os.path.join(self.models_dir, '*', model_name, 'model.sdf')
-        import glob as _glob
-        matches = _glob.glob(model_sdf)
+        matches = glob.glob(model_sdf)
         if not matches:
             # fallback: search two levels deep
             model_sdf_direct = os.path.join(self.models_dir, model_name, 'model.sdf')

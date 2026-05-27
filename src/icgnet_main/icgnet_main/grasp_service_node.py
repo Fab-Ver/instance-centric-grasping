@@ -1,6 +1,5 @@
 import colorsys
 import os
-import struct
 
 import numpy as np
 import rclpy
@@ -26,12 +25,16 @@ except ImportError:
 
 try:
     from .icgnet_inference import ICGNetPredictor
-    from .pointcloud_utils import pointcloud2_to_numpy, process_point_cloud
+    from .pointcloud_utils import (
+        PointCloudConfig, gripper_keypoints_world, pointcloud2_to_numpy, process_point_cloud,
+    )
 except ImportError:
     import sys
     sys.path.append(os.path.dirname(__file__))
     from icgnet_inference import ICGNetPredictor
-    from pointcloud_utils import pointcloud2_to_numpy, process_point_cloud
+    from pointcloud_utils import (
+        PointCloudConfig, gripper_keypoints_world, pointcloud2_to_numpy, process_point_cloud,
+    )
 
 
 def _score_to_color(score: float) -> ColorRGBA:
@@ -40,35 +43,6 @@ def _score_to_color(score: float) -> ColorRGBA:
     r, g, b = colorsys.hsv_to_rgb(h, 1.0, 1.0)
     return ColorRGBA(r=float(r), g=float(g), b=float(b), a=0.9)
 
-
-def _gripper_points_world(c: np.ndarray, R: np.ndarray, w: float):
-    """
-    Return the 6 keypoints of the gripper wireframe in world frame.
-    Local frame: y=finger-closing (surface normal), z=approach (toward object).
-    Gripper geometry matches ICGNet's create_our_gripper_marker with
-    center_offset=[0,0,-0.045] and rotations=[0,0,pi/2].
-
-    Segments (each as (start, end) pair):
-      left-finger, right-finger, crossbar, handle
-    """
-    half_w = w / 2.0
-    # Keypoints in local frame (TCP = origin)
-    lf_base = np.array([0.0,  half_w, -0.045])
-    rf_base = np.array([0.0, -half_w, -0.045])
-    lf_tip  = np.array([0.0,  half_w,  0.005])
-    rf_tip  = np.array([0.0, -half_w,  0.005])
-    cb      = np.array([0.0,  0.0,    -0.045])   # crossbar center = handle start
-    handle  = np.array([0.0,  0.0,    -0.115])   # handle end
-
-    def wp(lp):
-        return c + R @ lp
-
-    return [
-        (wp(lf_base), wp(lf_tip)),    # left finger
-        (wp(rf_base), wp(rf_tip)),    # right finger
-        (wp(rf_base), wp(lf_base)),   # crossbar
-        (wp(cb),      wp(handle)),    # handle
-    ]
 
 
 def _build_grasp_markers(centers, rot_matrices, scores, widths, frame_id, now):
@@ -101,7 +75,7 @@ def _build_grasp_markers(centers, rot_matrices, scores, widths, frame_id, now):
     for c, R, s, w in zip(centers, rot_matrices, scores, widths):
         color = _score_to_color(float(s))
         w_clipped = float(np.clip(w, 0.02, 0.08))
-        segments = _gripper_points_world(c, R, w_clipped)
+        segments = gripper_keypoints_world(c, R, w_clipped)
         for start, end in segments:
             m.points.append(Point(x=float(start[0]), y=float(start[1]), z=float(start[2])))
             m.points.append(Point(x=float(end[0]),   y=float(end[1]),   z=float(end[2])))
@@ -162,6 +136,10 @@ class ICGNetGraspNode(Node):
         self.declare_parameter('return_meshes', True)
         self.declare_parameter('table_z_top', 0.05)
         self.declare_parameter('table_z_margin', 0.005)
+        self.declare_parameter('pc_nb_neighbors', 20)
+        self.declare_parameter('pc_std_ratio', 2.0)
+        self.declare_parameter('pc_normal_radius_factor', 5.0)
+        self.declare_parameter('pc_normal_max_nn', 30)
 
         config_path = os.path.expanduser(
             self.get_parameter('config_path').get_parameter_value().string_value
@@ -181,6 +159,13 @@ class ICGNetGraspNode(Node):
             'z': (self.get_parameter('workspace_z_min').get_parameter_value().double_value,
                   self.get_parameter('workspace_z_max').get_parameter_value().double_value),
         }
+        self._pc_config = PointCloudConfig(
+            voxel_size=self.voxel_size,
+            nb_neighbors=self.get_parameter('pc_nb_neighbors').get_parameter_value().integer_value,
+            std_ratio=self.get_parameter('pc_std_ratio').get_parameter_value().double_value,
+            normal_radius_factor=self.get_parameter('pc_normal_radius_factor').get_parameter_value().double_value,
+            normal_max_nn=self.get_parameter('pc_normal_max_nn').get_parameter_value().integer_value,
+        )
 
         # ── Model loading (non-fatal: node stays alive without model for debug) ─
         self.predictor = None
@@ -392,7 +377,7 @@ class ICGNetGraspNode(Node):
         # 3. Preprocessing (crop → downsample → outlier removal → normals)
         pts, normals = process_point_cloud(
             points_world,
-            voxel_size=self.voxel_size,
+            config=self._pc_config,
             camera_position=camera_pos_world,
             workspace_bounds=self.workspace_bounds,
         )

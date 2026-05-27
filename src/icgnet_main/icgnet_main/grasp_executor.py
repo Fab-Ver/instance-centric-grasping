@@ -21,6 +21,7 @@ from pymoveit2.robots import panda as robot
 
 from icgnet_msgs.msg import GraspArray
 from icgnet_msgs.srv import ExecuteGrasp
+from icgnet_main.pointcloud_utils import gripper_keypoints_world
 
 # Compact home configuration matching the URDF initial_value parameters
 HOME_JOINT_POSITIONS = [0.0, -1.0, 0.0, -2.5, 0.0, 2.0, 0.785]
@@ -30,26 +31,6 @@ SEMANTIC_CLASSES = {
     'cylindric': 4, 'ball': 5, 'other': 6,
 }
 
-
-def _gripper_points_world(c: np.ndarray, R: np.ndarray, w: float):
-    """Gripper wireframe keypoints in world frame. Matches grasp_service_node geometry."""
-    half_w = w / 2.0
-    lf_base = np.array([0.0,  half_w, -0.045])
-    rf_base = np.array([0.0, -half_w, -0.045])
-    lf_tip  = np.array([0.0,  half_w,  0.005])
-    rf_tip  = np.array([0.0, -half_w,  0.005])
-    cb      = np.array([0.0,  0.0,    -0.045])
-    handle  = np.array([0.0,  0.0,    -0.115])
-
-    def wp(lp):
-        return c + R @ lp
-
-    return [
-        (wp(lf_base), wp(lf_tip)),
-        (wp(rf_base), wp(rf_tip)),
-        (wp(rf_base), wp(lf_base)),
-        (wp(cb),      wp(handle)),
-    ]
 
 
 class GraspExecutorNode(Node):
@@ -113,11 +94,20 @@ class GraspExecutorNode(Node):
         self.declare_parameter('acm_allowed_links',
                                ['panda_leftfinger', 'panda_rightfinger', 'panda_hand'])
         self.declare_parameter('collision_id_prefix', 'icgnet_inst_')
+        self.declare_parameter('finger_safety_margin', 0.01)
+        self.declare_parameter('max_finger_pos', 0.04)
+        self.declare_parameter('gripper_read_settle', 0.3)
+        self.declare_parameter('min_finger_gap', 0.005)
+        self.declare_parameter('executor_threads', 4)
 
         self._use_collision_scene = self.get_parameter('use_collision_scene').get_parameter_value().bool_value
         self._attach_weight = self.get_parameter('attach_weight').get_parameter_value().double_value
         self._acm_allowed_links = self.get_parameter('acm_allowed_links').get_parameter_value().string_array_value
         self._collision_id_prefix = self.get_parameter('collision_id_prefix').get_parameter_value().string_value
+        self._finger_safety_margin = self.get_parameter('finger_safety_margin').get_parameter_value().double_value
+        self._max_finger_pos = self.get_parameter('max_finger_pos').get_parameter_value().double_value
+        self._gripper_read_settle = self.get_parameter('gripper_read_settle').get_parameter_value().double_value
+        self._min_finger_gap = self.get_parameter('min_finger_gap').get_parameter_value().double_value
 
         # Callback groups: MutuallyExclusive for the grasp service and planning-scene clients
         # to prevent deadlocks in MultiThreadedExecutor (ROS2 guideline).
@@ -386,7 +376,7 @@ class GraspExecutorNode(Node):
         m.lifetime = rclpy.duration.Duration(seconds=60).to_msg()
 
         color = ColorRGBA(r=0.0, g=1.0, b=1.0, a=1.0)  # cyan = active attempt
-        for start, end in _gripper_points_world(pos, R, w):
+        for start, end in gripper_keypoints_world(pos, R, w):
             m.points.append(Point(x=float(start[0]), y=float(start[1]), z=float(start[2])))
             m.points.append(Point(x=float(end[0]),   y=float(end[1]),   z=float(end[2])))
             m.colors.append(color)
@@ -485,7 +475,7 @@ class GraspExecutorNode(Node):
         self._arm.max_acceleration = self._approach_acceleration
 
         # Open gripper to pre-grasp width before approaching
-        per_finger_pos = min(g.width / 2.0 + 0.01, 0.04)
+        per_finger_pos = min(g.width / 2.0 + self._finger_safety_margin, self._max_finger_pos)
         self._gripper.move_to_position(per_finger_pos)
         self._gripper.wait_until_executed()
 
@@ -562,7 +552,7 @@ class GraspExecutorNode(Node):
         self.get_logger().info("[STEP 3/5] CLOSING GRIPPER")
         self._gripper.close()
         self._gripper.wait_until_executed()
-        time.sleep(0.3)  # let the controller settle before reading finger positions
+        time.sleep(self._gripper_read_settle)  # let the controller settle before reading finger positions
 
         # Detect grasp: if fingers are fully closed the object was missed.
         # OPEN=0.04m, CLOSED=0.0m per finger; threshold 5mm means jaw gap > 10mm total.
@@ -574,7 +564,7 @@ class GraspExecutorNode(Node):
                     finger_gap = max(finger_gap, js.position[js.name.index(fname)])
                 except ValueError:
                     pass
-        if finger_gap < 0.005:
+        if finger_gap < self._min_finger_gap:
             self.get_logger().warn(
                 f"[STEP 3/5] Gripper fully closed (gap={finger_gap*1000:.1f}mm) — "
                 "no object grasped, aborting"
@@ -662,7 +652,7 @@ class GraspExecutorNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = GraspExecutorNode()
-    executor = MultiThreadedExecutor(4)
+    executor = MultiThreadedExecutor(node.get_parameter('executor_threads').get_parameter_value().integer_value)
     executor.add_node(node)
     thread = Thread(target=executor.spin, daemon=True)
     thread.start()

@@ -41,3 +41,19 @@ grasp_executor_node:
 
     # Must match grasp_service_node collision_id_prefix.
     collision_id_prefix: 'icgnet_inst_'
+
+    # ── Gripper control ───────────────────────────────────────────────────────
+    # Extra per-finger opening added to g.width/2 for the pre-grasp position (m).
+    finger_safety_margin: 0.01
+
+    # Hardware per-finger position limit; caps the pre-grasp opening (m).
+    max_finger_pos: 0.04
+
+    # Seconds to wait after close command before reading the finger gap.
+    gripper_read_settle: 0.3
+
+    # If the finger gap is below this value the gripper is fully closed → missed grasp (m).
+    min_finger_gap: 0.005
+
+    # Thread pool size for MultiThreadedExecutor.
+    executor_threads: 4
