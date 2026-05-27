@@ -19,17 +19,57 @@ import rclpy
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
 
-from pymoveit2 import MoveIt2
+from pymoveit2 import MoveIt2, MoveIt2Gripper
 from pymoveit2.robots import panda as robot
 
 READY = [0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785]
 REACH = [0.0, -0.3,   0.0, -1.8,   0.0,  1.5,  0.785]
 
 
+def _test_joint_goal(arm: MoveIt2, node: Node) -> None:
+    node.get_logger().info('Phase 1: moving to REACH joint config')
+    arm.move_to_configuration(joint_positions=REACH)
+    arm.wait_until_executed()
+    node.get_logger().info('Phase 1: REACH done, returning to READY')
+    arm.move_to_configuration(joint_positions=READY)
+    arm.wait_until_executed()
+    node.get_logger().info('Phase 1: complete')
+
+
+def _test_pose_goal(arm: MoveIt2, node: Node) -> None:
+    node.get_logger().info('Phase 2: moving TCP to [0.4, 0.0, 0.5]')
+    arm.move_to_pose(position=[0.4, 0.0, 0.5], quat_xyzw=[0.0, 0.0, 0.0, 1.0])
+    arm.wait_until_executed()
+    node.get_logger().info('Phase 2: returning to READY')
+    arm.move_to_configuration(joint_positions=READY)
+    arm.wait_until_executed()
+    node.get_logger().info('Phase 2: complete')
+
+
+def _test_gripper(node: Node) -> None:
+    gripper_cb = ReentrantCallbackGroup()
+    gripper = MoveIt2Gripper(
+        node=node,
+        gripper_joint_names=robot.gripper_joint_names(),
+        open_gripper_joint_positions=robot.OPEN_GRIPPER_JOINT_POSITIONS,
+        closed_gripper_joint_positions=robot.CLOSED_GRIPPER_JOINT_POSITIONS,
+        gripper_group_name=robot.MOVE_GROUP_GRIPPER,
+        callback_group=gripper_cb,
+    )
+    node.create_rate(0.5).sleep()
+    node.get_logger().info('Phase 3: opening gripper')
+    gripper.open()
+    gripper.wait_until_executed()
+    node.get_logger().info('Phase 3: closing gripper')
+    gripper.close()
+    gripper.wait_until_executed()
+    node.get_logger().info('Phase 3: complete')
+
+
 def main():
     rclpy.init()
     node = Node('test_move_to_pose')
-    node.declare_parameter('phase', 0) # 0: all phases, 1: joint goal, 2: pose goal, 3: gripper
+    node.declare_parameter('phase', 0)  # 0: all phases, 1: joint goal, 2: pose goal, 3: gripper
     phase = node.get_parameter('phase').get_parameter_value().integer_value
 
     cb = ReentrantCallbackGroup()
@@ -51,46 +91,12 @@ def main():
     executor_thread.start()
     node.create_rate(1.0).sleep()
 
-    # ── Phase 1: joint goal ───────────────────────────────────────────────
     if phase in (0, 1):
-        node.get_logger().info('Phase 1: moving to REACH joint config')
-        arm.move_to_configuration(joint_positions=REACH)
-        arm.wait_until_executed()
-        node.get_logger().info('Phase 1: REACH done, returning to READY')
-        arm.move_to_configuration(joint_positions=READY)
-        arm.wait_until_executed()
-        node.get_logger().info('Phase 1: complete')
-
-    # ── Phase 2: Cartesian pose goal ──────────────────────────────────────
+        _test_joint_goal(arm, node)
     if phase in (0, 2):
-        node.get_logger().info('Phase 2: moving TCP to [0.4, 0.0, 0.5]')
-        arm.move_to_pose(position=[0.4, 0.0, 0.5], quat_xyzw=[0.0, 0.0, 0.0, 1.0])
-        arm.wait_until_executed()
-        node.get_logger().info('Phase 2: returning to READY')
-        arm.move_to_configuration(joint_positions=READY)
-        arm.wait_until_executed()
-        node.get_logger().info('Phase 2: complete')
-
-    # ── Phase 3: gripper ─────────────────────────────────────────────────
+        _test_pose_goal(arm, node)
     if phase in (0, 3):
-        from pymoveit2 import MoveIt2Gripper
-        gripper_cb = ReentrantCallbackGroup()
-        gripper = MoveIt2Gripper(
-            node=node,
-            gripper_joint_names=robot.gripper_joint_names(),
-            open_gripper_joint_positions=robot.OPEN_GRIPPER_JOINT_POSITIONS,
-            closed_gripper_joint_positions=robot.CLOSED_GRIPPER_JOINT_POSITIONS,
-            gripper_group_name=robot.MOVE_GROUP_GRIPPER,
-            callback_group=gripper_cb,
-        )
-        node.create_rate(0.5).sleep()
-        node.get_logger().info('Phase 3: opening gripper')
-        gripper.open()
-        gripper.wait_until_executed()
-        node.get_logger().info('Phase 3: closing gripper')
-        gripper.close()
-        gripper.wait_until_executed()
-        node.get_logger().info('Phase 3: complete')
+        _test_gripper(node)
 
     node.get_logger().info('=== Test complete ===')
     rclpy.shutdown()

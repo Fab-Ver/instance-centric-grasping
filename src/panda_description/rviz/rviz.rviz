@@ -309,6 +309,18 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /icgnet/current_grasp_marker
       Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: false
+      Name: ICGNet All Grasps (heatmap)
+      Namespaces:
+        icgnet_grasps: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /icgnet/grasps_markers
+      Value: true
     - Alpha: 0.9
       Arrow Length: 0.05
       Axes Length: 0.05
@@ -350,41 +362,6 @@ Visualization Manager:
         Robot Alpha: 1
         Show Robot Collision: false
         Show Robot Visual: false
-      Value: true
-    - Class: moveit_rviz_plugin/MotionPlanning
-      Enabled: true
-      Move Group Namespace: ""
-      Motion Planning:
-        Allow External Program Communication: false
-        Allow Replanning: false
-        Allow Sensor Positioning: false
-        Planning Group: arm
-        Planning Time: 5
-        Show Workspace: false
-        Use Cartesian Path: false
-        Use Constraint-Aware IK: true
-      Name: MotionPlanning
-      Planned Path:
-        Color: 0; 160; 255
-        Enabled: true
-        Loop Animation: false
-        Robot Alpha: 0.699999988079071
-        Show Robot Visual: true
-        Show Trail: false
-        Speed Factor: 1
-        Trail Step Size: 1
-      Planning Scene Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /monitored_planning_scene
-      Robot Description: robot_description
-      Scene Geometry:
-        Scene Alpha: 0.8999999761581421
-        Scene Color: 50; 230; 50
-        Scene Display Time: 0.009999999776482582
-        Show Scene Geometry: true
       Value: true
   Enabled: true
   Global Options:

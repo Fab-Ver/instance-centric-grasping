@@ -1,5 +1,3 @@
-import rclpy
-from rclpy.node import Node
 import sys
 import subprocess
 import os

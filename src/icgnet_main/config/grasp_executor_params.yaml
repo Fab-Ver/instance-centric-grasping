@@ -57,3 +57,12 @@ grasp_executor_node:
 
     # Thread pool size for MultiThreadedExecutor.
     executor_threads: 4
+
+    # ── Grasp filtering ───────────────────────────────────────────────────────
+    # Grasps wider than this are discarded (beyond Panda finger range) (m).
+    max_grasp_width: 0.08
+
+    # ── Arm velocity defaults ────────────────────────────────────────────────
+    # Velocity/acceleration fraction used for home moves and after failure recovery.
+    arm_default_velocity: 0.5
+    arm_default_acceleration: 0.5

@@ -99,6 +99,9 @@ class GraspExecutorNode(Node):
         self.declare_parameter('gripper_read_settle', 0.3)
         self.declare_parameter('min_finger_gap', 0.005)
         self.declare_parameter('executor_threads', 4)
+        self.declare_parameter('max_grasp_width', 0.08)
+        self.declare_parameter('arm_default_velocity', 0.5)
+        self.declare_parameter('arm_default_acceleration', 0.5)
 
         self._use_collision_scene = self.get_parameter('use_collision_scene').get_parameter_value().bool_value
         self._attach_weight = self.get_parameter('attach_weight').get_parameter_value().double_value
@@ -108,6 +111,9 @@ class GraspExecutorNode(Node):
         self._max_finger_pos = self.get_parameter('max_finger_pos').get_parameter_value().double_value
         self._gripper_read_settle = self.get_parameter('gripper_read_settle').get_parameter_value().double_value
         self._min_finger_gap = self.get_parameter('min_finger_gap').get_parameter_value().double_value
+        self._max_grasp_width = self.get_parameter('max_grasp_width').get_parameter_value().double_value
+        self._arm_default_velocity = self.get_parameter('arm_default_velocity').get_parameter_value().double_value
+        self._arm_default_acceleration = self.get_parameter('arm_default_acceleration').get_parameter_value().double_value
 
         # Callback groups: MutuallyExclusive for the grasp service and planning-scene clients
         # to prevent deadlocks in MultiThreadedExecutor (ROS2 guideline).
@@ -125,8 +131,8 @@ class GraspExecutorNode(Node):
             group_name=robot.MOVE_GROUP_ARM,
             callback_group=cb_arm,
         )
-        self._arm.max_velocity = 0.5
-        self._arm.max_acceleration = 0.5
+        self._arm.max_velocity = self._arm_default_velocity
+        self._arm.max_acceleration = self._arm_default_acceleration
         self._arm.orientation_tolerance = 0.05
         self._arm.cartesian_jump_threshold = 5.0
 
@@ -312,7 +318,7 @@ class GraspExecutorNode(Node):
             if g.score < min_score:
                 n_score += 1
                 continue
-            if g.width > 0.08:
+            if g.width > self._max_grasp_width:
                 n_width += 1
                 continue
             if not (self._ws['x'][0] <= p.x <= self._ws['x'][1] and
@@ -496,8 +502,8 @@ class GraspExecutorNode(Node):
             self.get_logger().warn(
                 f"[STEP 1/5] PRE-GRASP FAILED in {dt:.2f}s — aborting this candidate"
             )
-            self._arm.max_velocity = 0.5
-            self._arm.max_acceleration = 0.5
+            self._arm.max_velocity = self._arm_default_velocity
+            self._arm.max_acceleration = self._arm_default_acceleration
             self._restore_acm(target_co_id)
             return False
         self.get_logger().info(f"[STEP 1/5] Pre-grasp reached in {dt:.2f}s")
@@ -520,8 +526,8 @@ class GraspExecutorNode(Node):
             self.get_logger().warn(
                 f"[STEP 2/5] APPROACH FAILED in {dt:.2f}s — aborting this candidate"
             )
-            self._arm.max_velocity = 0.5
-            self._arm.max_acceleration = 0.5
+            self._arm.max_velocity = self._arm_default_velocity
+            self._arm.max_acceleration = self._arm_default_acceleration
             self._restore_acm(target_co_id)
             return False
         self.get_logger().info(f"[STEP 2/5] Approach reached in {dt:.2f}s")
@@ -542,8 +548,8 @@ class GraspExecutorNode(Node):
             self.get_logger().warn(
                 f"[STEP 2b] MICRO-ADVANCE FAILED in {dt:.2f}s — aborting this candidate"
             )
-            self._arm.max_velocity = 0.5
-            self._arm.max_acceleration = 0.5
+            self._arm.max_velocity = self._arm_default_velocity
+            self._arm.max_acceleration = self._arm_default_acceleration
             self._restore_acm(target_co_id)
             return False
         self.get_logger().info(f"[STEP 2b] Contact position reached in {dt:.2f}s")
@@ -569,8 +575,8 @@ class GraspExecutorNode(Node):
                 f"[STEP 3/5] Gripper fully closed (gap={finger_gap*1000:.1f}mm) — "
                 "no object grasped, aborting"
             )
-            self._arm.max_velocity = 0.5
-            self._arm.max_acceleration = 0.5
+            self._arm.max_velocity = self._arm_default_velocity
+            self._arm.max_acceleration = self._arm_default_acceleration
             self._restore_acm(target_co_id)
             return False
         self.get_logger().info(
@@ -608,8 +614,8 @@ class GraspExecutorNode(Node):
         dt = time.time() - t0
         if not ok:
             self.get_logger().warn(f"[STEP 4/5] LIFT FAILED in {dt:.2f}s")
-            self._arm.max_velocity = 0.5
-            self._arm.max_acceleration = 0.5
+            self._arm.max_velocity = self._arm_default_velocity
+            self._arm.max_acceleration = self._arm_default_acceleration
             if self._use_collision_scene:
                 try:
                     self._arm.detach_collision_object(id=target_co_id)
@@ -621,8 +627,8 @@ class GraspExecutorNode(Node):
         self.get_logger().info(f"[STEP 4/5] Object lifted in {dt:.2f}s")
 
         # ── Step 5/5: return to home (object secured, arm in safe config) ─────
-        self._arm.max_velocity = 0.5
-        self._arm.max_acceleration = 0.5
+        self._arm.max_velocity = self._arm_default_velocity
+        self._arm.max_acceleration = self._arm_default_acceleration
         self.get_logger().info("[STEP 5/5] MOVING TO HOME")
         t0 = time.time()
         self._arm.move_to_configuration(

@@ -446,12 +446,8 @@ class ICGNetGraspNode(Node):
             pose_array.poses.append(p)
         self.grasp_pub.publish(pose_array)
 
-        # ICGNet all-grasps markers disabled — only grasp_executor's current-grasp marker shown.
-        # Uncomment to re-enable the full grasp heatmap in RViz.
-        # marker_array = _build_grasp_markers(
-        #     centers_f, rot_f, scores_f, widths_f, self.target_frame, now
-        # )
-        # self.marker_pub.publish(marker_array)
+        marker_array = _build_grasp_markers(centers_f, rot_f, scores_f, widths_f, self.target_frame, now)
+        self.marker_pub.publish(marker_array)
 
         # 9. Publish GraspArray with full metadata (consumed by grasp_executor)
         if self.rich_pub is not None:
