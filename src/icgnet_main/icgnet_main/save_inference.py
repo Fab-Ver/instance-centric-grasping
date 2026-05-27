@@ -69,12 +69,10 @@ class SaveInferenceNode(Node):
         self._saved = True
 
     def _do_save(self):
-        # Grasps
         path = os.path.join(self._output_dir, 'grasps.bin')
         with open(path, 'wb') as f:
             f.write(serialize_message(self._grasps))
 
-        # Collision objects
         co_ids = []
         for idx, (co_id, co_msg) in enumerate(self._collision_objects.items()):
             path = os.path.join(self._output_dir, f'collision_{idx}.bin')
@@ -82,7 +80,6 @@ class SaveInferenceNode(Node):
                 f.write(serialize_message(co_msg))
             co_ids.append(co_id)
 
-        # Meta
         meta = {
             'n_grasps': len(self._grasps.grasps),
             'n_collision_objects': len(self._collision_objects),

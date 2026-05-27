@@ -224,7 +224,6 @@ class GraspExecutorNode(Node):
         with self._grasps_lock:
             self._latest_grasps = None
 
-        # Trigger ICGNet inference
         if not self._compute_client.wait_for_service(timeout_sec=5.0):
             res.success = False
             res.message = f"Service '{self._compute_client.srv_name}' not available"
@@ -238,7 +237,6 @@ class GraspExecutorNode(Node):
             res.message = f"ICGNet inference failed: {future.result().message}"
             return res
 
-        # Wait for GraspArray published after inference
         deadline = time.time() + 5.0
         grasps = None
         while time.time() < deadline:
@@ -480,7 +478,6 @@ class GraspExecutorNode(Node):
         self._arm.max_velocity = self._approach_velocity
         self._arm.max_acceleration = self._approach_acceleration
 
-        # Open gripper to pre-grasp width before approaching
         per_finger_pos = min(g.width / 2.0 + self._finger_safety_margin, self._max_finger_pos)
         self._gripper.move_to_position(per_finger_pos)
         self._gripper.wait_until_executed()

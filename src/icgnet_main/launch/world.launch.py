@@ -20,14 +20,12 @@ def generate_launch_description():
 
     return LaunchDescription([
         set_gazebo_model_path,
-        # Gazebo + Panda + RViz + controllers
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 os.path.join(pkg_panda_gazebo, 'gazebo.launch.py')
             ),
             launch_arguments={'world': world_path}.items(),
         ),
-        # MoveIt2 move_group node
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 os.path.join(pkg_icgnet_main, 'launch', 'move_group.launch.py')

@@ -24,7 +24,6 @@ def main():
     print(f"DEBUG SPAWNER: Spawning '{model_name}' as '{entity_name}' at (0.65, 0.0)...")
     
     try:
-        # Run and show output immediately
         process = subprocess.Popen(cmd)
         process.wait()
         

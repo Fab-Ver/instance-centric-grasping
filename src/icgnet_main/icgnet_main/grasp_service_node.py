@@ -328,14 +328,7 @@ class ICGNetGraspNode(Node):
         return response
 
     def _run_inference(self):
-        """
-        Full pipeline:
-        1. PointCloud2 → numpy (camera frame)
-        2. TF: camera → world
-        3. Preprocessing (voxel downsample + normals toward camera)
-        4. ICGNet inference
-        5. Publish PoseArray + MarkerArray + GraspArray
-        """
+        """Run the full inference pipeline and publish PoseArray, GraspArray, and CollisionObjects."""
         # 1. Convert ROS message to numpy
         raw_points = pointcloud2_to_numpy(self.latest_pc_msg)
         cloud_frame = self.latest_pc_msg.header.frame_id
@@ -360,7 +353,6 @@ class ICGNetGraspNode(Node):
         rot_mat = Rotation.from_quat([q.x, q.y, q.z, q.w]).as_matrix()
         translation = np.array([t.x, t.y, t.z])
 
-        # world_pts = R @ cam_pts.T + t
         points_world = (rot_mat @ raw_points.T).T + translation
         camera_pos_world = translation
 
@@ -374,7 +366,6 @@ class ICGNetGraspNode(Node):
         if n_removed > 0:
             self.get_logger().info(f"Table filter: removed {n_removed} pts at z≤{z_cutoff:.3f}m")
 
-        # 3. Preprocessing (crop → downsample → outlier removal → normals)
         pts, normals = process_point_cloud(
             points_world,
             config=self._pc_config,
@@ -390,7 +381,6 @@ class ICGNetGraspNode(Node):
         cloud_msg = _numpy_to_pointcloud2(pts, self.target_frame, self.get_clock().now().to_msg())
         self.preprocessed_cloud_pub.publish(cloud_msg)
 
-        # 4. ICGNet inference
         do_meshes = self._publish_co and self.get_parameter('return_meshes').get_parameter_value().bool_value
         output = self.predictor.predict(pts, normals, n_grasps=self.n_grasps, return_meshes=do_meshes)
 
@@ -418,7 +408,6 @@ class ICGNetGraspNode(Node):
 
         n_total = len(centers)
 
-        # 6. Filter by score
         mask = scores >= self.score_threshold
         rot_f     = rot_matrices[mask]
         centers_f = centers[mask]
@@ -429,7 +418,6 @@ class ICGNetGraspNode(Node):
 
         now = self.get_clock().now().to_msg()
 
-        # 7. Publish PoseArray
         pose_array = PoseArray()
         pose_array.header.frame_id = self.target_frame
         pose_array.header.stamp = now
@@ -449,7 +437,6 @@ class ICGNetGraspNode(Node):
         marker_array = _build_grasp_markers(centers_f, rot_f, scores_f, widths_f, self.target_frame, now)
         self.marker_pub.publish(marker_array)
 
-        # 9. Publish GraspArray with full metadata (consumed by grasp_executor)
         if self.rich_pub is not None:
             ga = GraspArray()
             ga.header.frame_id = self.target_frame
@@ -464,7 +451,6 @@ class ICGNetGraspNode(Node):
                 ga.grasps.append(g)
             self.rich_pub.publish(ga)
 
-        # 10. Publish CollisionObjects from ICGNet reconstructions
         if self._publish_co and do_meshes and output.reconstructions:
             self._publish_collision_objects_from_reconstructions(output.reconstructions, self.target_frame)
             self.get_logger().info(
