@@ -39,7 +39,7 @@ rosdep update
 cd ~/instance-centric-grasping
 source /opt/ros/humble/setup.bash
 rosdep install --from-paths src --ignore-src -y
-colcon build --packages-select icgnet_msgs icgnet_main panda_ros2_gazebo
+colcon build --packages-select icgnet_msgs icgnet_main panda_description
 source install/setup.bash
 ```
 
@@ -68,7 +68,7 @@ rosdep install --from-paths src --ignore-src -y
 ```bash
 cd ~/instance-centric-grasping
 source /opt/ros/humble/setup.bash
-colcon build --packages-select icgnet_msgs icgnet_main panda_ros2_gazebo
+colcon build --packages-select icgnet_msgs icgnet_main panda_description
 source install/setup.bash
 ```
 

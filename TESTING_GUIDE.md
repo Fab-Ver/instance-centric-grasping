@@ -1,7 +1,7 @@
 # Testing Guide — ICGNet ROS2 Gazebo
 
-Stato del branch: `full_grasp_pipeline`
-Ultimo aggiornamento: 2026-05-26
+Stato del branch: `improved_version_to_test`
+Ultimo aggiornamento: 2026-05-27
 
 ---
 
