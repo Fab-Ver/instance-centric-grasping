@@ -96,8 +96,9 @@ ros2 launch icgnet_main world.launch.py
 ### T2 — Replay inferenza (sostituisce T3 della Pipeline A)
 
 ```bash
+PKG=$(ros2 pkg prefix icgnet_main)/share/icgnet_main
 ros2 launch icgnet_main icgnet_replay.launch.py \
-  inference_dir:=$HOME/icgnet_inference_data
+  inference_dir:=./icgnet_inference_data
 # Atteso: "ReplayInferenceNode ready — N grasps, M collision objects"
 ```
 
@@ -113,9 +114,10 @@ ros2 launch icgnet_main grasp_execution.launch.py
 # Spawna beer_can in Gazebo + pubblica grasps e collision objects salvati
 ros2 service call /icgnet/compute_grasps std_srvs/srv/Trigger
 
-# Esegui grasp
+# Esegui grasp```
+
+# T5-ter: trigger grasp
 ros2 service call /icgnet/execute_grasp icgnet_msgs/srv/ExecuteGrasp "{target: 'can'}"
-```
 
 Ogni nuovo trigger rispawna l'oggetto nella stessa posizione — la stessa inferenza viene ripubblicata, permettendo N attempt partendo dallo stesso stato.
 
