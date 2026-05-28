@@ -29,7 +29,7 @@ panda_arm_controller:
     allow_partial_joints_goal: false
     gains:
       panda_joint1: {p: 50.0,    i: 0.0, d: 20.0,  i_clamp: 0.0, ff_velocity_scale: 1.0}
-      panda_joint2: {p: 10000.0, i: 15.0, d: 500.0, i_clamp: 150.0, ff_velocity_scale: 1.0}
+      panda_joint2: {p: 10000.0, i: 15.0, d: 500.0, i_clamp: 300.0, ff_velocity_scale: 1.0}
       panda_joint3: {p: 100.0,   i: 0.0, d: 10.0,  i_clamp: 0.0,   ff_velocity_scale: 1.0}
       panda_joint4: {p: 1000.0,  i: 5.0, d: 50.0,  i_clamp: 50.0,  ff_velocity_scale: 1.0}
       panda_joint5: {p: 100.0,   i: 0.0, d: 10.0,  i_clamp: 0.0, ff_velocity_scale: 1.0}
@@ -37,7 +37,7 @@ panda_arm_controller:
       panda_joint7: {p: 10.0,    i: 0.5, d: 0.1,   i_clamp: 0.0, ff_velocity_scale: 1.0}
     constraints:
       stopped_velocity_tolerance: 0.2
-      goal_time: 10.0
+      goal_time: 20.0
       panda_joint1: {goal: 0.15}
       panda_joint2: {goal: 0.15}
       panda_joint3: {goal: 0.15}
@@ -69,5 +69,9 @@ panda_hand_controller:
     constraints:
       stopped_velocity_tolerance: 0.05
       goal_time: 5.0
-      panda_finger_joint1: {goal: 0.005}
-      panda_finger_joint2: {goal: 0.005}
+      # 0.04 = max finger pos: JTC never aborts (blocked by object = within tolerance).
+      # Without this, the JTC aborts when object blocks fingers at 7mm (> 5mm old tolerance),
+      # drops effort to 0, and the gripper opens → object drops. With 0.04 tolerance,
+      # PID continuously applies closing force regardless of object contact.
+      panda_finger_joint1: {goal: 0.04}
+      panda_finger_joint2: {goal: 0.04}

@@ -6,10 +6,8 @@ grasp_executor_node:
     default_max_attempts: 5
     approach_offset: 0.12
     grasp_forward_offset: 0.045
-    approach_velocity: 0.12
-    approach_acceleration: 0.12
-    contact_velocity: 0.03
-    contact_acceleration: 0.03
+    approach_velocity: 0.08
+    approach_acceleration: 0.08
     lift_velocity: 0.10
     lift_acceleration: 0.10
     cartesian_fraction_threshold: 0.92
@@ -57,6 +55,11 @@ grasp_executor_node:
     # If the finger gap is below this value the gripper is fully closed → missed grasp (m).
     min_finger_gap: 0.005
 
+    # If the finger gap is above this value the gripper barely closed → object tipped/missed (m).
+    # At pre-grasp, fingers are at max_finger_pos=0.04m. A successful grasp must close
+    # at least 4mm from max → threshold = 0.036m. Catches gripper-controller-abort false positives.
+    max_finger_gap: 0.036
+
     # Thread pool size for MultiThreadedExecutor.
     executor_threads: 4
 
@@ -66,8 +69,10 @@ grasp_executor_node:
 
     # ── Arm velocity defaults ────────────────────────────────────────────────
     # Velocity/acceleration fraction used for home moves and after failure recovery.
-    arm_default_velocity: 0.7
-    arm_default_acceleration: 0.7
+    arm_default_velocity: 0.5
+    arm_default_acceleration: 0.5
+    max_approach_angle_deg: 45.0
+    min_approach_angle_deg: 0.0
 
     # ── MoveIt2 planning parameters ──────────────────────────────────────────
     # Allowed planning time (s) per motion goal. 5s is sufficient for RRTConnect

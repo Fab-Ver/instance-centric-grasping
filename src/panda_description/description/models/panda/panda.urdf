@@ -391,9 +391,9 @@
 
     <gazebo reference="panda_leftfinger">
       <material>Gazebo/Orange</material>
-      <mu1>2.0</mu1>
-      <mu2>2.0</mu2>
-      <kp>1e4</kp>
+      <mu1>5.0</mu1>
+      <mu2>5.0</mu2>
+      <kp>5e5</kp>
       <kd>100</kd>
       <minDepth>0.001</minDepth>
       <maxVel>0.1</maxVel>
@@ -401,9 +401,9 @@
 
     <gazebo reference="panda_rightfinger">
       <material>Gazebo/Orange</material>
-      <mu1>2.0</mu1>
-      <mu2>2.0</mu2>
-      <kp>1e4</kp>
+      <mu1>5.0</mu1>
+      <mu2>5.0</mu2>
+      <kp>5e5</kp>
       <kd>100</kd>
       <minDepth>0.001</minDepth>
       <maxVel>0.1</maxVel>

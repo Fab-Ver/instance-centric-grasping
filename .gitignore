@@ -349,3 +349,7 @@ lib/
 *.bag
 /scenes/
 /grasps/
+
+# Output di debug / log sessione
+output_*.md
+image.png

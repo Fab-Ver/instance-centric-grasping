@@ -7,7 +7,8 @@ import rclpy.duration
 from gazebo_msgs.srv import SetEntityState
 from geometry_msgs.msg import Point
 from moveit_msgs.msg import (
-    AllowedCollisionEntry, AllowedCollisionMatrix, PlanningScene, PlanningSceneComponents,
+    AllowedCollisionEntry, AllowedCollisionMatrix, CollisionObject,
+    PlanningScene, PlanningSceneComponents,
 )
 from moveit_msgs.srv import ApplyPlanningScene, GetPlanningScene
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
@@ -45,11 +46,9 @@ class GraspExecutorNode(Node):
         self.declare_parameter('default_min_score', 0.5)
         self.declare_parameter('default_max_attempts', 5)
         self.declare_parameter('approach_offset', 0.10)
-        self.declare_parameter('grasp_forward_offset', 0.04)
-        self.declare_parameter('approach_velocity', 0.12)
-        self.declare_parameter('approach_acceleration', 0.12)
-        self.declare_parameter('contact_velocity', 0.03)
-        self.declare_parameter('contact_acceleration', 0.03)
+        self.declare_parameter('grasp_forward_offset', 0.045)
+        self.declare_parameter('approach_velocity', 0.08)
+        self.declare_parameter('approach_acceleration', 0.08)
         self.declare_parameter('pregrasp_settle_time', 0.8)
         self.declare_parameter('lift_velocity', 0.10)
         self.declare_parameter('lift_acceleration', 0.10)
@@ -71,8 +70,6 @@ class GraspExecutorNode(Node):
         self._grasp_forward_offset = self.get_parameter('grasp_forward_offset').get_parameter_value().double_value
         self._approach_velocity = self.get_parameter('approach_velocity').get_parameter_value().double_value
         self._approach_acceleration = self.get_parameter('approach_acceleration').get_parameter_value().double_value
-        self._contact_velocity = self.get_parameter('contact_velocity').get_parameter_value().double_value
-        self._contact_acceleration = self.get_parameter('contact_acceleration').get_parameter_value().double_value
         self._pregrasp_settle_time = self.get_parameter('pregrasp_settle_time').get_parameter_value().double_value
         self._lift_velocity = self.get_parameter('lift_velocity').get_parameter_value().double_value
         self._lift_acceleration = self.get_parameter('lift_acceleration').get_parameter_value().double_value
@@ -103,12 +100,15 @@ class GraspExecutorNode(Node):
         self.declare_parameter('max_finger_pos', 0.04)
         self.declare_parameter('gripper_read_settle', 0.3)
         self.declare_parameter('min_finger_gap', 0.005)
+        self.declare_parameter('max_finger_gap', 0.036)
         self.declare_parameter('executor_threads', 4)
         self.declare_parameter('max_grasp_width', 0.08)
         self.declare_parameter('arm_default_velocity', 0.5)
         self.declare_parameter('arm_default_acceleration', 0.5)
         self.declare_parameter('allowed_planning_time', 5.0)
         self.declare_parameter('num_planning_attempts', 10)
+        self.declare_parameter('max_approach_angle_deg', 90.0)
+        self.declare_parameter('min_approach_angle_deg', 0.0)
 
         self._use_collision_scene = self.get_parameter('use_collision_scene').get_parameter_value().bool_value
         self._attach_weight = self.get_parameter('attach_weight').get_parameter_value().double_value
@@ -118,11 +118,14 @@ class GraspExecutorNode(Node):
         self._max_finger_pos = self.get_parameter('max_finger_pos').get_parameter_value().double_value
         self._gripper_read_settle = self.get_parameter('gripper_read_settle').get_parameter_value().double_value
         self._min_finger_gap = self.get_parameter('min_finger_gap').get_parameter_value().double_value
+        self._max_finger_gap = self.get_parameter('max_finger_gap').get_parameter_value().double_value
         self._max_grasp_width = self.get_parameter('max_grasp_width').get_parameter_value().double_value
         self._arm_default_velocity = self.get_parameter('arm_default_velocity').get_parameter_value().double_value
         self._arm_default_acceleration = self.get_parameter('arm_default_acceleration').get_parameter_value().double_value
         self._allowed_planning_time = self.get_parameter('allowed_planning_time').get_parameter_value().double_value
         self._num_planning_attempts = self.get_parameter('num_planning_attempts').get_parameter_value().integer_value
+        self._max_approach_angle_deg = self.get_parameter('max_approach_angle_deg').get_parameter_value().double_value
+        self._min_approach_angle_deg = self.get_parameter('min_approach_angle_deg').get_parameter_value().double_value
 
         # Callback groups: MutuallyExclusive for the grasp service and planning-scene clients
         # to prevent deadlocks in MultiThreadedExecutor (ROS2 guideline).
@@ -175,6 +178,8 @@ class GraspExecutorNode(Node):
         self._get_scene_client = self.create_client(
             GetPlanningScene, '/get_planning_scene', callback_group=cb_svc
         )
+
+        self._co_pub = self.create_publisher(CollisionObject, '/collision_object', 10)
 
         self._saved_acm: AllowedCollisionMatrix | None = None
 
@@ -323,7 +328,7 @@ class GraspExecutorNode(Node):
     def _filter_grasps(self, grasps, target: str, min_score: float) -> list:
         filtered = []
         n_total = len(grasps)
-        n_score = n_ws = n_width = n_target = 0
+        n_score = n_ws = n_width = n_target = n_angle = 0
         for g in grasps:
             p = g.pose.position
             if g.score < min_score:
@@ -340,6 +345,12 @@ class GraspExecutorNode(Node):
             if not self._matches_target(g, target):
                 n_target += 1
                 continue
+            q = g.pose.orientation
+            approach = Rotation.from_quat([q.x, q.y, q.z, q.w]).as_matrix()[:, 2]
+            angle_deg = float(np.degrees(np.arccos(np.clip(-approach[2], -1.0, 1.0))))
+            if angle_deg > self._max_approach_angle_deg or angle_deg < self._min_approach_angle_deg:
+                n_angle += 1
+                continue
             filtered.append(g)
 
         filtered.sort(key=lambda g: g.score, reverse=True)
@@ -349,8 +360,8 @@ class GraspExecutorNode(Node):
         )
         self.get_logger().info(
             f"[FILTER] total={n_total} → kept={len(filtered)} (min_score≥{min_score:.2f}, "
-            f"scores={score_range}) | "
-            f"rejected: score<threshold={n_score} width={n_width} workspace={n_ws} target={n_target}"
+            f"scores={score_range}, angle=[{self._min_approach_angle_deg:.0f}°–{self._max_approach_angle_deg:.0f}°]) | "
+            f"rejected: score={n_score} width={n_width} workspace={n_ws} target={n_target} angle={n_angle}"
         )
         return filtered
 
@@ -501,6 +512,35 @@ class GraspExecutorNode(Node):
         self._apply_acm(self._saved_acm)
         self._saved_acm = None
 
+    def _fetch_co_from_scene(self, co_id: str):
+        req = GetPlanningScene.Request()
+        req.components.components = PlanningSceneComponents.WORLD_OBJECT_GEOMETRY
+        fut = self._get_scene_client.call_async(req)
+        if not self._wait_for_future(fut):
+            self.get_logger().warn(f"[CO] GetPlanningScene timed out while fetching '{co_id}'")
+            return None
+        for co in fut.result().scene.world.collision_objects:
+            if co.id == co_id:
+                return co
+        self.get_logger().warn(f"[CO] '{co_id}' not found in planning scene")
+        return None
+
+    def _remove_co_from_scene(self, co_id: str):
+        msg = CollisionObject()
+        msg.id = co_id
+        msg.header.frame_id = 'world'
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.operation = CollisionObject.REMOVE
+        self._co_pub.publish(msg)
+
+    def _readd_co_to_scene(self, co: CollisionObject | None):
+        if co is None:
+            return
+        co.operation = CollisionObject.ADD
+        co.header.stamp = self.get_clock().now().to_msg()
+        self._co_pub.publish(co)
+        time.sleep(0.15)  # let move_group process ADD before planning
+
     def _abort_grasp(self, target_co_id: str) -> bool:
         self._arm.max_velocity = self._arm_default_velocity
         self._arm.max_acceleration = self._arm_default_acceleration
@@ -538,13 +578,31 @@ class GraspExecutorNode(Node):
         target_co_id = f"{self._collision_id_prefix}{g.instance_id}"
 
         per_finger_pos = min(g.width / 2.0 + self._finger_safety_margin, self._max_finger_pos)
+        actual_opening = 2.0 * per_finger_pos
+        icgnet_opening = g.width
+        width_note = (
+            f" [CAPPED at max_finger_pos={self._max_finger_pos*1000:.0f}mm/side]"
+            if per_finger_pos == self._max_finger_pos else ""
+        )
+        if abs(actual_opening - icgnet_opening) > 0.002:
+            self.get_logger().warn(
+                f"[GRIPPER] ICGNet width={icgnet_opening*1000:.1f}mm → "
+                f"pre-grasp opening={actual_opening*1000:.1f}mm (per finger={per_finger_pos*1000:.1f}mm){width_note}"
+            )
+        else:
+            self.get_logger().info(
+                f"[GRIPPER] pre-grasp opening={actual_opening*1000:.1f}mm "
+                f"(ICGNet={icgnet_opening*1000:.1f}mm, per finger={per_finger_pos*1000:.1f}mm){width_note}"
+            )
         self._gripper.move_to_position(per_finger_pos)
         self._gripper.wait_until_executed()
 
-        # ── Step 0: collision-scene barrier + ACM permissive ──────────────────
+        # ── Step 0: update collision scene ───────────────────────────────────
+        # ACM is set permissive only AFTER pre-grasp, so joint-space planning
+        # in Step 1 still treats the target CO as an obstacle and finds a valid
+        # approach configuration from outside the object volume.
         if self._use_collision_scene:
             self._arm.update_planning_scene()
-            self._set_acm_permissive(target_co_id)
 
         # ── Step 1/5: pre-grasp (joint-space, default velocity) ───────────────
         self.get_logger().info(
@@ -562,40 +620,28 @@ class GraspExecutorNode(Node):
         self.get_logger().info(f"[STEP 1/5] Pre-grasp reached in {dt:.2f}s")
         time.sleep(self._pregrasp_settle_time)
 
-        # Switch to slow velocity for Cartesian approach and lift
+        # Switch to approach velocity for Cartesian move.
         self._arm.max_velocity = self._approach_velocity
         self._arm.max_acceleration = self._approach_acceleration
 
-        # ── Step 2/5: Cartesian approach → ICGNet TCP ────────────────────────────
-        # ICGNet TCP is 0.045 m from the contact surface along approach axis.
-        # Approach from outside/edge of the collision object volume.
-        self.get_logger().info(
-            f"[STEP 2/5] CARTESIAN APPROACH → [{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}]"
-            f"  (vel={self._approach_velocity})"
-        )
-        t0 = time.time()
-        self._arm.move_to_pose(
-            position=pos.tolist(), quat_xyzw=quat_xyzw,
-            cartesian=True, cartesian_max_step=self._cartesian_max_step_approach,
-            cartesian_fraction_threshold=self._cartesian_fraction_threshold,
-        )
-        ok = self._arm.wait_until_executed()
-        dt = time.time() - t0
-        if not ok:
-            self.get_logger().warn(
-                f"[STEP 2/5] APPROACH FAILED in {dt:.2f}s — aborting this candidate"
-            )
-            return self._abort_grasp(target_co_id)
-        self.get_logger().info(f"[STEP 2/5] ICGNet TCP reached in {dt:.2f}s")
+        # Remove CO from scene so the Cartesian approach path is unblocked.
+        # The CO is fetched first so it can be re-added before attach in Step 3b.
+        # Pre-grasp (Step 1) ran with CO in scene, so joint-space planning correctly
+        # avoided it; only now (outside the object) do we remove it.
+        _target_co = None
+        if self._use_collision_scene:
+            _target_co = self._fetch_co_from_scene(target_co_id)
+            self._remove_co_from_scene(target_co_id)
+            self.get_logger().info(f"[CO] Removed '{target_co_id}' from scene for approach")
 
-        # ── Step 2b/5: advance to contact surface (slow) ─────────────────────────
-        # Switches to contact_velocity for a gentle final approach into the CO zone.
-        # This prevents knocking over the object before grip.
-        self._arm.max_velocity = self._contact_velocity
-        self._arm.max_acceleration = self._contact_acceleration
+        # ── Step 2/5: Cartesian approach → contact surface ───────────────────────
+        # contact_pos = pos + grasp_forward_offset * approach
+        # where pos is ICGNet TCP (0.045 m behind contact along approach),
+        # so contact_pos = exactly the predicted contact point on the object surface.
+        # Single slow Cartesian move: pre_pos → contact_pos.
         self.get_logger().info(
-            f"[STEP 2b/5] CONTACT ADVANCE → [{contact_pos[0]:.3f}, {contact_pos[1]:.3f}, {contact_pos[2]:.3f}]"
-            f"  (vel={self._contact_velocity})"
+            f"[STEP 2/5] CARTESIAN APPROACH → [{contact_pos[0]:.3f}, {contact_pos[1]:.3f}, {contact_pos[2]:.3f}]"
+            f"  (vel={self._approach_velocity})"
         )
         t0 = time.time()
         self._arm.move_to_pose(
@@ -607,10 +653,11 @@ class GraspExecutorNode(Node):
         dt = time.time() - t0
         if not ok:
             self.get_logger().warn(
-                f"[STEP 2b/5] CONTACT ADVANCE FAILED in {dt:.2f}s — aborting this candidate"
+                f"[STEP 2/5] APPROACH FAILED in {dt:.2f}s — aborting this candidate"
             )
+            self._readd_co_to_scene(_target_co)
             return self._abort_grasp(target_co_id)
-        self.get_logger().info(f"[STEP 2b/5] Contact surface reached in {dt:.2f}s")
+        self.get_logger().info(f"[STEP 2/5] Contact surface reached in {dt:.2f}s")
 
         # ── Step 3/5: close gripper + verify grasp ────────────────────────────
         self.get_logger().info("[STEP 3/5] CLOSING GRIPPER")
@@ -630,16 +677,26 @@ class GraspExecutorNode(Node):
                     pass
         if finger_gap < self._min_finger_gap:
             self.get_logger().warn(
-                f"[STEP 3/5] Gripper fully closed (gap={finger_gap*1000:.1f}mm) — "
-                "no object grasped, aborting"
+                f"[STEP 3/5] Gripper fully closed (gap={finger_gap*1000:.1f}mm < "
+                f"{self._min_finger_gap*1000:.0f}mm) — missed object"
             )
+            self._readd_co_to_scene(_target_co)
+            return self._abort_grasp(target_co_id)
+        if finger_gap > self._max_finger_gap:
+            self.get_logger().warn(
+                f"[STEP 3/5] Gripper barely closed (gap={finger_gap*1000:.1f}mm > "
+                f"{self._max_finger_gap*1000:.0f}mm) — object tipped or controller aborted"
+            )
+            self._readd_co_to_scene(_target_co)
             return self._abort_grasp(target_co_id)
         self.get_logger().info(
-            f"[STEP 3/5] Object confirmed between fingers (gap={finger_gap*1000:.1f}mm/side)"
+            f"[STEP 3/5] Object confirmed between fingers "
+            f"(gap={finger_gap*1000:.1f}mm, range [{self._min_finger_gap*1000:.0f}–{self._max_finger_gap*1000:.0f}mm])"
         )
 
-        # ── Step 3b: attach collision object to gripper for collision-aware lift ─
+        # ── Step 3b: re-add CO then attach to gripper for collision-aware lift ──
         if self._use_collision_scene:
+            self._readd_co_to_scene(_target_co)
             try:
                 self._arm.attach_collision_object(
                     id=target_co_id,
@@ -687,10 +744,10 @@ class GraspExecutorNode(Node):
                     finger_gap_post = max(finger_gap_post, js_post.position[js_post.name.index(fname)])
                 except ValueError:
                     pass
-        if finger_gap_post < self._min_finger_gap:
+        if finger_gap_post < self._min_finger_gap or finger_gap_post > self._max_finger_gap:
             self.get_logger().warn(
-                f"[STEP 4/5 POST-CHECK] Object dropped during lift "
-                f"(gap={finger_gap_post*1000:.1f}mm) — reporting failure"
+                f"[STEP 4/5 POST-CHECK] Object lost during lift "
+                f"(gap={finger_gap_post*1000:.1f}mm, expected [{self._min_finger_gap*1000:.0f}–{self._max_finger_gap*1000:.0f}mm]) — reporting failure"
             )
             if self._use_collision_scene:
                 try:
