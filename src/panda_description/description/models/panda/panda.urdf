@@ -422,10 +422,7 @@
       </hardware>
 
       <joint name="panda_joint1">
-        <command_interface name="effort">
-          <param name="min">-87</param>
-          <param name="max">87</param>
-        </command_interface>
+        <command_interface name="position"/>
         <state_interface name="position">
           <param name="initial_value">0.0</param>
         </state_interface>
@@ -435,10 +432,7 @@
       </joint>
 
       <joint name="panda_joint2">
-        <command_interface name="effort">
-          <param name="min">-87</param>
-          <param name="max">87</param>
-        </command_interface>
+        <command_interface name="position"/>
         <state_interface name="position">
           <param name="initial_value">-1.000</param>
         </state_interface>
@@ -448,10 +442,7 @@
       </joint>
 
       <joint name="panda_joint3">
-        <command_interface name="effort">
-          <param name="min">-87</param>
-          <param name="max">87</param>
-        </command_interface>
+        <command_interface name="position"/>
         <state_interface name="position">
           <param name="initial_value">0.0</param>
         </state_interface>
@@ -461,10 +452,7 @@
       </joint>
 
       <joint name="panda_joint4">
-        <command_interface name="effort">
-          <param name="min">-87</param>
-          <param name="max">87</param>
-        </command_interface>
+        <command_interface name="position"/>
         <state_interface name="position">
           <param name="initial_value">-2.500</param>
         </state_interface>
@@ -474,10 +462,7 @@
       </joint>
 
       <joint name="panda_joint5">
-        <command_interface name="effort">
-          <param name="min">-12</param>
-          <param name="max">12</param>
-        </command_interface>
+        <command_interface name="position"/>
         <state_interface name="position">
           <param name="initial_value">0.0</param>
         </state_interface>
@@ -487,10 +472,7 @@
       </joint>
 
       <joint name="panda_joint6">
-        <command_interface name="effort">
-          <param name="min">-12</param>
-          <param name="max">12</param>
-        </command_interface>
+        <command_interface name="position"/>
         <state_interface name="position">
           <param name="initial_value">2.000</param>
         </state_interface>
@@ -500,10 +482,7 @@
       </joint>
 
       <joint name="panda_joint7">
-        <command_interface name="effort">
-          <param name="min">-12</param>
-          <param name="max">12</param>
-        </command_interface>
+        <command_interface name="position"/>
         <state_interface name="position">
           <param name="initial_value">0.785398</param>
         </state_interface>

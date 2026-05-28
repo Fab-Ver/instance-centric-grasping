@@ -147,7 +147,7 @@ class GraspExecutorNode(Node):
         self._arm.max_acceleration = self._arm_default_acceleration
         self._arm.allowed_planning_time = self._allowed_planning_time
         self._arm.num_planning_attempts = self._num_planning_attempts
-        self._arm.cartesian_jump_threshold = 5.0
+        self._arm.cartesian_jump_threshold = 0.0
 
         self._gripper = MoveIt2Gripper(
             node=self,
