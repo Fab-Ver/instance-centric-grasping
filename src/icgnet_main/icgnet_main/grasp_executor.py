@@ -506,10 +506,6 @@ class GraspExecutorNode(Node):
 
         target_co_id = f"{self._collision_id_prefix}{g.instance_id}"
 
-        # Slow velocity for all motion from pre-grasp through lift; restored after HOME.
-        self._arm.max_velocity = self._approach_velocity
-        self._arm.max_acceleration = self._approach_acceleration
-
         per_finger_pos = min(g.width / 2.0 + self._finger_safety_margin, self._max_finger_pos)
         self._gripper.move_to_position(per_finger_pos)
         self._gripper.wait_until_executed()
@@ -519,7 +515,7 @@ class GraspExecutorNode(Node):
             self._arm.update_planning_scene()
             self._set_acm_permissive(target_co_id)
 
-        # ── Step 1/5: pre-grasp (joint-space) ─────────────────────────────────
+        # ── Step 1/5: pre-grasp (joint-space, default velocity) ───────────────
         self.get_logger().info(
             f"[STEP 1/5] PRE-GRASP → [{pre_pos[0]:.3f}, {pre_pos[1]:.3f}, {pre_pos[2]:.3f}]"
         )
@@ -534,6 +530,10 @@ class GraspExecutorNode(Node):
             return self._abort_grasp(target_co_id)
         self.get_logger().info(f"[STEP 1/5] Pre-grasp reached in {dt:.2f}s")
         time.sleep(self._pregrasp_settle_time)
+
+        # Switch to slow velocity for Cartesian approach and lift
+        self._arm.max_velocity = self._approach_velocity
+        self._arm.max_acceleration = self._approach_acceleration
 
         # ── Step 2/5: Cartesian approach (straight line along approach axis) ──
         self.get_logger().info(

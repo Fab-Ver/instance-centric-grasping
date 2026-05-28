@@ -1,3 +1,4 @@
+# TABLE DISABLED — this node is not launched; table is not in use (objects on ground)
 import rclpy
 from geometry_msgs.msg import Pose
 from moveit_msgs.msg import CollisionObject

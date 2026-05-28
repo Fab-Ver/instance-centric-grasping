@@ -389,9 +389,16 @@ class ICGNetModule(nn.Module):
         # -------------------------------------------------------------
         # ------------------- Grasp Prediction-- ----------------------
         # -------------------------------------------------------------
+        # Allow callers to override n_grasps per-call via kwargs.
+        # ICGNetModule.__call__ does not declare n_grasps explicitly,
+        # so it arrives in **kwargs and would otherwise be silently ignored.
+        effective_n_grasps = kwargs.pop('n_grasps', self.n_grasps)
+        old_n_grasps = self.n_grasps
+        self.n_grasps = effective_n_grasps
         scene_grasp_poses, obj_grasp_poses = self._get_grasps(
             grasp_pts, grasp_normals, embeddings, return_scene_grasps, **kwargs
         )
+        self.n_grasps = old_n_grasps
 
         if kwargs.get("resample", False) and (scene_grasp_poses[2] > kwargs.get("th", 0.5)).sum() < 5:
             """Trigger resampling of surface points if not enough valid grasps are found."""

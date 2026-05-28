@@ -37,11 +37,9 @@ icgnet_grasp_node:
     workspace_z_min: 0.01
     workspace_z_max: 0.60
 
-    # Table geometry for pointcloud filtering (world frame, metres).
-    # Points at or below table_z_top + table_z_margin are removed before ICGNet inference
-    # to prevent table surface from polluting the instance segmentation.
-    table_z_top: 0.05
-    table_z_margin: 0.005
+    # TABLE DISABLED — objects rest on the ground; table z-filter not active
+    # table_z_top: 0.05
+    # table_z_margin: 0.005
 
     # ── Collision objects (MoveIt2 planning scene) ────────────────────────────
     # Publish per-instance collision meshes reconstructed by ICGNet after each
