@@ -112,7 +112,7 @@ class ICGNetGraspNode(Node):
         self.declare_parameter('icgnet_repo_path', '')
         self.declare_parameter('camera_topic', '/camera/rgbd_camera/points')
         self.declare_parameter('target_frame', 'world')
-        self.declare_parameter('voxel_size', 0.01)
+        self.declare_parameter('voxel_size', 0.003)
         self.declare_parameter('n_grasps', 32)
         self.declare_parameter('score_threshold', 0.0)
         self.declare_parameter('workspace_x_min', 0.25)

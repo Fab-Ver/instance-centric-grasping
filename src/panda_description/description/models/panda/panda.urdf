@@ -393,8 +393,8 @@
       <material>Gazebo/Orange</material>
       <mu1>2.0</mu1>
       <mu2>2.0</mu2>
-      <kp>1e6</kp>
-      <kd>50</kd>
+      <kp>1e4</kp>
+      <kd>100</kd>
       <minDepth>0.001</minDepth>
       <maxVel>0.1</maxVel>
     </gazebo>
@@ -403,8 +403,8 @@
       <material>Gazebo/Orange</material>
       <mu1>2.0</mu1>
       <mu2>2.0</mu2>
-      <kp>1e6</kp>
-      <kd>50</kd>
+      <kp>1e4</kp>
+      <kd>100</kd>
       <minDepth>0.001</minDepth>
       <maxVel>0.1</maxVel>
     </gazebo>
@@ -513,18 +513,18 @@
       </joint>
 
       <joint name="panda_finger_joint1">
-        <command_interface name="position">
-          <param name="min">-0.001</param>
-          <param name="max">0.04</param>
+        <command_interface name="effort">
+          <param name="min">-70</param>
+          <param name="max">70</param>
         </command_interface>
         <state_interface name="position"/>
         <state_interface name="velocity"/>
       </joint>
 
       <joint name="panda_finger_joint2">
-        <command_interface name="position">
-          <param name="min">-0.001</param>
-          <param name="max">0.04</param>
+        <command_interface name="effort">
+          <param name="min">-70</param>
+          <param name="max">70</param>
         </command_interface>
         <state_interface name="position"/>
         <state_interface name="velocity"/>

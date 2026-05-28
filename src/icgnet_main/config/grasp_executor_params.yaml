@@ -15,10 +15,10 @@ grasp_executor_node:
     cartesian_max_step_micro: 0.003
     pregrasp_settle_time: 0.8
     lift_height: 0.25
-    workspace_x_min: 0.20
-    workspace_x_max: 0.80
-    workspace_y_min: -0.40
-    workspace_y_max: 0.40
+    workspace_x_min: 0.25
+    workspace_x_max: 1.05
+    workspace_y_min: -0.50
+    workspace_y_max: 0.50
     workspace_z_min: 0.01
     workspace_z_max: 0.60
     object_entity_name: 'target_obj'
@@ -50,7 +50,8 @@ grasp_executor_node:
     max_finger_pos: 0.04
 
     # Seconds to wait after close command before reading the finger gap.
-    gripper_read_settle: 0.3
+    # Effort-controlled gripper needs ~0.5s to reach force steady-state against the object.
+    gripper_read_settle: 0.5
 
     # If the finger gap is below this value the gripper is fully closed → missed grasp (m).
     min_finger_gap: 0.005
@@ -66,3 +67,11 @@ grasp_executor_node:
     # Velocity/acceleration fraction used for home moves and after failure recovery.
     arm_default_velocity: 0.5
     arm_default_acceleration: 0.5
+
+    # ── MoveIt2 planning parameters ──────────────────────────────────────────
+    # Allowed planning time (s) per motion goal. 5s is sufficient for RRTConnect
+    # in a scene with ICGNet collision objects; 0.5s (pymoveit2 default) is too tight.
+    allowed_planning_time: 5.0
+
+    # Number of planning attempts before declaring failure.
+    num_planning_attempts: 10
