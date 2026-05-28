@@ -61,10 +61,11 @@ panda_hand_controller:
     action_monitor_rate: 20.0
     allow_partial_joints_goal: false
     gains:
-      # p=1000 N/m: at error=0.033m (beer can radius) → 33 N/finger → friction=66 N >> 5 N needed
-      # ki=50 with clamp ensures steady-state hold; kd=10 damps oscillations
-      panda_finger_joint1: {p: 1000.0, i: 50.0, d: 10.0, i_clamp: 70.0}
-      panda_finger_joint2: {p: 1000.0, i: 50.0, d: 10.0, i_clamp: 70.0}
+      # p=3000 N/m: at error=0.007m (beer_can: gripper 80mm, can dia 66mm → 7mm gap/finger)
+      # → 21N → capped at URDF limit 20N → immediate full force from first control cycle
+      # kd=20 damps closing oscillations; i accumulates for steady-state hold
+      panda_finger_joint1: {p: 3000.0, i: 50.0, d: 20.0, i_clamp: 100.0}
+      panda_finger_joint2: {p: 3000.0, i: 50.0, d: 20.0, i_clamp: 100.0}
     constraints:
       stopped_velocity_tolerance: 0.05
       goal_time: 5.0

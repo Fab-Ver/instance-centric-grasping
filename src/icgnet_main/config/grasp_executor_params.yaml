@@ -4,15 +4,16 @@ grasp_executor_node:
     compute_grasp_service: '/icgnet/compute_grasps'
     default_min_score: 0.5
     default_max_attempts: 5
-    approach_offset: 0.10
-    grasp_forward_offset: 0.04
-    approach_velocity: 0.05
-    approach_acceleration: 0.05
+    approach_offset: 0.12
+    grasp_forward_offset: 0.045
+    approach_velocity: 0.12
+    approach_acceleration: 0.12
+    contact_velocity: 0.03
+    contact_acceleration: 0.03
     lift_velocity: 0.10
     lift_acceleration: 0.10
     cartesian_fraction_threshold: 0.92
     cartesian_max_step_approach: 0.008
-    cartesian_max_step_micro: 0.003
     pregrasp_settle_time: 0.8
     lift_height: 0.25
     workspace_x_min: 0.25
@@ -65,8 +66,8 @@ grasp_executor_node:
 
     # ── Arm velocity defaults ────────────────────────────────────────────────
     # Velocity/acceleration fraction used for home moves and after failure recovery.
-    arm_default_velocity: 0.5
-    arm_default_acceleration: 0.5
+    arm_default_velocity: 0.7
+    arm_default_acceleration: 0.7
 
     # ── MoveIt2 planning parameters ──────────────────────────────────────────
     # Allowed planning time (s) per motion goal. 5s is sufficient for RRTConnect

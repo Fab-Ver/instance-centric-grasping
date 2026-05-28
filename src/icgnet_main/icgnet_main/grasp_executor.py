@@ -42,23 +42,24 @@ class GraspExecutorNode(Node):
 
         self.declare_parameter('rich_grasp_topic', '/icgnet/grasps_rich')
         self.declare_parameter('compute_grasp_service', '/icgnet/compute_grasps')
-        self.declare_parameter('default_min_score', 0.4)
+        self.declare_parameter('default_min_score', 0.5)
         self.declare_parameter('default_max_attempts', 5)
         self.declare_parameter('approach_offset', 0.10)
         self.declare_parameter('grasp_forward_offset', 0.04)
-        self.declare_parameter('approach_velocity', 0.05)
-        self.declare_parameter('approach_acceleration', 0.05)
+        self.declare_parameter('approach_velocity', 0.12)
+        self.declare_parameter('approach_acceleration', 0.12)
+        self.declare_parameter('contact_velocity', 0.03)
+        self.declare_parameter('contact_acceleration', 0.03)
         self.declare_parameter('pregrasp_settle_time', 0.8)
         self.declare_parameter('lift_velocity', 0.10)
         self.declare_parameter('lift_acceleration', 0.10)
-        self.declare_parameter('cartesian_fraction_threshold', 0.85)
+        self.declare_parameter('cartesian_fraction_threshold', 0.92)
         self.declare_parameter('cartesian_max_step_approach', 0.008)
-        self.declare_parameter('cartesian_max_step_micro', 0.003)
         self.declare_parameter('lift_height', 0.25)
-        self.declare_parameter('workspace_x_min', 0.20)
-        self.declare_parameter('workspace_x_max', 0.80)
-        self.declare_parameter('workspace_y_min', -0.40)
-        self.declare_parameter('workspace_y_max', 0.40)
+        self.declare_parameter('workspace_x_min', 0.25)
+        self.declare_parameter('workspace_x_max', 1.05)
+        self.declare_parameter('workspace_y_min', -0.50)
+        self.declare_parameter('workspace_y_max', 0.50)
         self.declare_parameter('workspace_z_min', 0.01)
         self.declare_parameter('workspace_z_max', 0.60)
         self.declare_parameter('object_entity_name', 'target_obj')
@@ -70,12 +71,13 @@ class GraspExecutorNode(Node):
         self._grasp_forward_offset = self.get_parameter('grasp_forward_offset').get_parameter_value().double_value
         self._approach_velocity = self.get_parameter('approach_velocity').get_parameter_value().double_value
         self._approach_acceleration = self.get_parameter('approach_acceleration').get_parameter_value().double_value
+        self._contact_velocity = self.get_parameter('contact_velocity').get_parameter_value().double_value
+        self._contact_acceleration = self.get_parameter('contact_acceleration').get_parameter_value().double_value
         self._pregrasp_settle_time = self.get_parameter('pregrasp_settle_time').get_parameter_value().double_value
         self._lift_velocity = self.get_parameter('lift_velocity').get_parameter_value().double_value
         self._lift_acceleration = self.get_parameter('lift_acceleration').get_parameter_value().double_value
         self._cartesian_fraction_threshold = self.get_parameter('cartesian_fraction_threshold').get_parameter_value().double_value
         self._cartesian_max_step_approach = self.get_parameter('cartesian_max_step_approach').get_parameter_value().double_value
-        self._cartesian_max_step_micro = self.get_parameter('cartesian_max_step_micro').get_parameter_value().double_value
         self._lift_height = self.get_parameter('lift_height').get_parameter_value().double_value
         self._default_min_score = self.get_parameter('default_min_score').get_parameter_value().double_value
         self._default_max_attempts = self.get_parameter('default_max_attempts').get_parameter_value().integer_value
@@ -105,6 +107,8 @@ class GraspExecutorNode(Node):
         self.declare_parameter('max_grasp_width', 0.08)
         self.declare_parameter('arm_default_velocity', 0.5)
         self.declare_parameter('arm_default_acceleration', 0.5)
+        self.declare_parameter('allowed_planning_time', 5.0)
+        self.declare_parameter('num_planning_attempts', 10)
 
         self._use_collision_scene = self.get_parameter('use_collision_scene').get_parameter_value().bool_value
         self._attach_weight = self.get_parameter('attach_weight').get_parameter_value().double_value
@@ -117,6 +121,8 @@ class GraspExecutorNode(Node):
         self._max_grasp_width = self.get_parameter('max_grasp_width').get_parameter_value().double_value
         self._arm_default_velocity = self.get_parameter('arm_default_velocity').get_parameter_value().double_value
         self._arm_default_acceleration = self.get_parameter('arm_default_acceleration').get_parameter_value().double_value
+        self._allowed_planning_time = self.get_parameter('allowed_planning_time').get_parameter_value().double_value
+        self._num_planning_attempts = self.get_parameter('num_planning_attempts').get_parameter_value().integer_value
 
         # Callback groups: MutuallyExclusive for the grasp service and planning-scene clients
         # to prevent deadlocks in MultiThreadedExecutor (ROS2 guideline).
@@ -136,7 +142,8 @@ class GraspExecutorNode(Node):
         )
         self._arm.max_velocity = self._arm_default_velocity
         self._arm.max_acceleration = self._arm_default_acceleration
-        self._arm.orientation_tolerance = 0.05
+        self._arm.allowed_planning_time = self._allowed_planning_time
+        self._arm.num_planning_attempts = self._num_planning_attempts
         self._arm.cartesian_jump_threshold = 5.0
 
         self._gripper = MoveIt2Gripper(
@@ -291,7 +298,6 @@ class GraspExecutorNode(Node):
                 f"inst={g.instance_id} cls={g.semantic_class}({CLASS_NAMES.get(g.semantic_class,'?')}) "
                 f"pos=[{p.x:.3f},{p.y:.3f},{p.z:.3f}]"
             )
-            self._publish_current_grasp_marker(g)
             if self._execute_single_grasp(g):
                 self._clear_current_grasp_marker()
                 res.success = True
@@ -362,12 +368,13 @@ class GraspExecutorNode(Node):
         self.get_logger().warn(f"Unknown target '{target}' — treating as 'any'")
         return True
 
-    def _publish_current_grasp_marker(self, g):
+    def _publish_current_grasp_marker(self, g, contact_pos: np.ndarray):
         pos = np.array([g.pose.position.x, g.pose.position.y, g.pose.position.z])
         q = g.pose.orientation
         R = Rotation.from_quat([q.x, q.y, q.z, q.w]).as_matrix()
         w = float(np.clip(g.width, 0.02, 0.08))
         now = self.get_clock().now().to_msg()
+        lifetime = rclpy.duration.Duration(seconds=60).to_msg()
 
         ma = MarkerArray()
         clear = Marker()
@@ -376,24 +383,42 @@ class GraspExecutorNode(Node):
         clear.action = Marker.DELETEALL
         ma.markers.append(clear)
 
-        m = Marker()
-        m.header.frame_id = 'world'
-        m.header.stamp = now
-        m.ns = 'current_grasp'
-        m.id = 0
-        m.type = Marker.LINE_LIST
-        m.action = Marker.ADD
-        m.scale.x = 0.006
-        m.lifetime = rclpy.duration.Duration(seconds=60).to_msg()
-
-        color = ColorRGBA(r=0.0, g=1.0, b=1.0, a=1.0)  # cyan = active attempt
+        # Cyan: ICGNet predicted TCP (backed off 0.045 m from contact surface)
+        m_tcp = Marker()
+        m_tcp.header.frame_id = 'world'
+        m_tcp.header.stamp = now
+        m_tcp.ns = 'current_grasp'
+        m_tcp.id = 0
+        m_tcp.type = Marker.LINE_LIST
+        m_tcp.action = Marker.ADD
+        m_tcp.scale.x = 0.005
+        m_tcp.lifetime = lifetime
+        color_cyan = ColorRGBA(r=0.0, g=1.0, b=1.0, a=0.7)
         for start, end in gripper_keypoints_world(pos, R, w):
-            m.points.append(Point(x=float(start[0]), y=float(start[1]), z=float(start[2])))
-            m.points.append(Point(x=float(end[0]),   y=float(end[1]),   z=float(end[2])))
-            m.colors.append(color)
-            m.colors.append(color)
+            m_tcp.points.append(Point(x=float(start[0]), y=float(start[1]), z=float(start[2])))
+            m_tcp.points.append(Point(x=float(end[0]),   y=float(end[1]),   z=float(end[2])))
+            m_tcp.colors.append(color_cyan)
+            m_tcp.colors.append(color_cyan)
+        ma.markers.append(m_tcp)
 
-        ma.markers.append(m)
+        # Green: actual grasp target (contact_pos = pos + forward_offset * approach)
+        m_contact = Marker()
+        m_contact.header.frame_id = 'world'
+        m_contact.header.stamp = now
+        m_contact.ns = 'current_grasp'
+        m_contact.id = 1
+        m_contact.type = Marker.LINE_LIST
+        m_contact.action = Marker.ADD
+        m_contact.scale.x = 0.007
+        m_contact.lifetime = lifetime
+        color_green = ColorRGBA(r=0.0, g=1.0, b=0.0, a=1.0)
+        for start, end in gripper_keypoints_world(contact_pos, R, w):
+            m_contact.points.append(Point(x=float(start[0]), y=float(start[1]), z=float(start[2])))
+            m_contact.points.append(Point(x=float(end[0]),   y=float(end[1]),   z=float(end[2])))
+            m_contact.colors.append(color_green)
+            m_contact.colors.append(color_green)
+        ma.markers.append(m_contact)
+
         self._current_grasp_pub.publish(ma)
 
     def _clear_current_grasp_marker(self):
@@ -483,6 +508,10 @@ class GraspExecutorNode(Node):
         return False
 
     def _execute_single_grasp(self, g) -> bool:
+        # Guarantee default velocity at every attempt start, regardless of prior state.
+        self._arm.max_velocity = self._arm_default_velocity
+        self._arm.max_acceleration = self._arm_default_acceleration
+
         pos = np.array([g.pose.position.x, g.pose.position.y, g.pose.position.z])
         q = g.pose.orientation
         quat_xyzw = [q.x, q.y, q.z, q.w]
@@ -493,11 +522,13 @@ class GraspExecutorNode(Node):
         lift_pos = (contact_pos + np.array([0.0, 0.0, self._lift_height])).tolist()
         angle_deg = float(np.degrees(np.arccos(np.clip(-approach[2], -1.0, 1.0))))
 
+        self._publish_current_grasp_marker(g, contact_pos)
+
         self.get_logger().info(
             f"[PLAN] score={g.score:.3f}  inst={g.instance_id}  cls={g.semantic_class}({CLASS_NAMES.get(g.semantic_class,'?')})  width={g.width:.4f}m\n"
             f"       icgnet_tcp  = [{pos[0]:.4f}, {pos[1]:.4f}, {pos[2]:.4f}]\n"
             f"       contact_pos = [{contact_pos[0]:.4f}, {contact_pos[1]:.4f}, {contact_pos[2]:.4f}]"
-            f"  (forward_offset={self._grasp_forward_offset*100:.0f}cm)\n"
+            f"  (forward_offset={self._grasp_forward_offset*100:.1f}cm)\n"
             f"       pre_pos     = [{pre_pos[0]:.4f}, {pre_pos[1]:.4f}, {pre_pos[2]:.4f}]\n"
             f"       lift_pos    = [{lift_pos[0]:.4f}, {lift_pos[1]:.4f}, {lift_pos[2]:.4f}]\n"
             f"       approach    = [{approach[0]:.4f}, {approach[1]:.4f}, {approach[2]:.4f}]"
@@ -535,7 +566,9 @@ class GraspExecutorNode(Node):
         self._arm.max_velocity = self._approach_velocity
         self._arm.max_acceleration = self._approach_acceleration
 
-        # ── Step 2/5: Cartesian approach (straight line along approach axis) ──
+        # ── Step 2/5: Cartesian approach → ICGNet TCP ────────────────────────────
+        # ICGNet TCP is 0.045 m from the contact surface along approach axis.
+        # Approach from outside/edge of the collision object volume.
         self.get_logger().info(
             f"[STEP 2/5] CARTESIAN APPROACH → [{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}]"
             f"  (vel={self._approach_velocity})"
@@ -553,26 +586,31 @@ class GraspExecutorNode(Node):
                 f"[STEP 2/5] APPROACH FAILED in {dt:.2f}s — aborting this candidate"
             )
             return self._abort_grasp(target_co_id)
-        self.get_logger().info(f"[STEP 2/5] Approach reached in {dt:.2f}s")
+        self.get_logger().info(f"[STEP 2/5] ICGNet TCP reached in {dt:.2f}s")
 
-        # ── Step 2b: micro-advance to contact position ────────────────────────
+        # ── Step 2b/5: advance to contact surface (slow) ─────────────────────────
+        # Switches to contact_velocity for a gentle final approach into the CO zone.
+        # This prevents knocking over the object before grip.
+        self._arm.max_velocity = self._contact_velocity
+        self._arm.max_acceleration = self._contact_acceleration
         self.get_logger().info(
-            f"[STEP 2b] MICRO-ADVANCE → [{contact_pos[0]:.3f}, {contact_pos[1]:.3f}, {contact_pos[2]:.3f}]"
+            f"[STEP 2b/5] CONTACT ADVANCE → [{contact_pos[0]:.3f}, {contact_pos[1]:.3f}, {contact_pos[2]:.3f}]"
+            f"  (vel={self._contact_velocity})"
         )
         t0 = time.time()
         self._arm.move_to_pose(
             position=contact_pos.tolist(), quat_xyzw=quat_xyzw,
-            cartesian=True, cartesian_max_step=self._cartesian_max_step_micro,
+            cartesian=True, cartesian_max_step=self._cartesian_max_step_approach,
             cartesian_fraction_threshold=self._cartesian_fraction_threshold,
         )
         ok = self._arm.wait_until_executed()
         dt = time.time() - t0
         if not ok:
             self.get_logger().warn(
-                f"[STEP 2b] MICRO-ADVANCE FAILED in {dt:.2f}s — aborting this candidate"
+                f"[STEP 2b/5] CONTACT ADVANCE FAILED in {dt:.2f}s — aborting this candidate"
             )
             return self._abort_grasp(target_co_id)
-        self.get_logger().info(f"[STEP 2b] Contact position reached in {dt:.2f}s")
+        self.get_logger().info(f"[STEP 2b/5] Contact surface reached in {dt:.2f}s")
 
         # ── Step 3/5: close gripper + verify grasp ────────────────────────────
         self.get_logger().info("[STEP 3/5] CLOSING GRIPPER")
