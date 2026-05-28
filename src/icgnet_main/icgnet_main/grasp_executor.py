@@ -32,6 +32,7 @@ SEMANTIC_CLASSES = {
     'mug': 0, 'box': 1, 'can': 2, 'bottle': 3,
     'cylindric': 4, 'ball': 5, 'other': 6,
 }
+CLASS_NAMES = {v: k for k, v in SEMANTIC_CLASSES.items()}
 
 
 
@@ -273,7 +274,7 @@ class GraspExecutorNode(Node):
             angle_from_vertical = float(np.degrees(np.arccos(np.clip(-approach[2], -1.0, 1.0))))
             p = g.pose.position
             self.get_logger().info(
-                f"  [{i+1}] score={g.score:.2f} inst={g.instance_id} cls={g.semantic_class} "
+                f"  [{i+1}] score={g.score:.2f} inst={g.instance_id} cls={g.semantic_class}({CLASS_NAMES.get(g.semantic_class,'?')}) "
                 f"pos=[{p.x:.3f},{p.y:.3f},{p.z:.3f}] "
                 f"approach=[{approach[0]:.3f},{approach[1]:.3f},{approach[2]:.3f}] "
                 f"angle_from_vertical={angle_from_vertical:.1f}° width={g.width:.3f}"
@@ -287,7 +288,7 @@ class GraspExecutorNode(Node):
             self.get_logger().info(
                 f"{'='*60}\n"
                 f"[ATTEMPT {i+1}/{len(candidates)}] score={g.score:.2f} "
-                f"inst={g.instance_id} cls={g.semantic_class} "
+                f"inst={g.instance_id} cls={g.semantic_class}({CLASS_NAMES.get(g.semantic_class,'?')}) "
                 f"pos=[{p.x:.3f},{p.y:.3f},{p.z:.3f}]"
             )
             self._publish_current_grasp_marker(g)
@@ -493,7 +494,7 @@ class GraspExecutorNode(Node):
         angle_deg = float(np.degrees(np.arccos(np.clip(-approach[2], -1.0, 1.0))))
 
         self.get_logger().info(
-            f"[PLAN] score={g.score:.3f}  inst={g.instance_id}  cls={g.semantic_class}  width={g.width:.4f}m\n"
+            f"[PLAN] score={g.score:.3f}  inst={g.instance_id}  cls={g.semantic_class}({CLASS_NAMES.get(g.semantic_class,'?')})  width={g.width:.4f}m\n"
             f"       icgnet_tcp  = [{pos[0]:.4f}, {pos[1]:.4f}, {pos[2]:.4f}]\n"
             f"       contact_pos = [{contact_pos[0]:.4f}, {contact_pos[1]:.4f}, {contact_pos[2]:.4f}]"
             f"  (forward_offset={self._grasp_forward_offset*100:.0f}cm)\n"
@@ -638,6 +639,28 @@ class GraspExecutorNode(Node):
                     self.get_logger().warn(f"[STEP 4 fail] Detach failed: {e}")
             return self._abort_grasp(target_co_id)
         self.get_logger().info(f"[STEP 4/5] Object lifted in {dt:.2f}s")
+
+        # Verify the object is still gripped after lift (drop detection).
+        js_post = self._arm.joint_state
+        finger_gap_post = 0.0
+        if js_post is not None:
+            for fname in robot.gripper_joint_names():
+                try:
+                    finger_gap_post = max(finger_gap_post, js_post.position[js_post.name.index(fname)])
+                except ValueError:
+                    pass
+        if finger_gap_post < self._min_finger_gap:
+            self.get_logger().warn(
+                f"[STEP 4/5 POST-CHECK] Object dropped during lift "
+                f"(gap={finger_gap_post*1000:.1f}mm) — reporting failure"
+            )
+            if self._use_collision_scene:
+                try:
+                    self._arm.detach_collision_object(id=target_co_id)
+                    self._arm.remove_collision_object(id=target_co_id)
+                except Exception as e:
+                    self.get_logger().warn(f"[STEP 4 drop] Detach failed: {e}")
+            return self._abort_grasp(target_co_id)
 
         # ── Step 5/5: return to home (object secured, arm in safe config) ─────
         self._arm.max_velocity = self._arm_default_velocity

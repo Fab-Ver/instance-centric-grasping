@@ -27,6 +27,7 @@ from .pointcloud_utils import (
 
 SCORE_HUE_GREEN = 0.33
 MIN_POINTS_FOR_INFERENCE = 50
+CLASS_NAMES = {0: 'mug', 1: 'box', 2: 'can', 3: 'bottle', 4: 'cylindric', 5: 'ball', 6: 'other'}
 
 
 def _score_to_color(score: float) -> ColorRGBA:
@@ -395,6 +396,17 @@ class ICGNetGraspNode(Node):
             sem_class_raw = np.full(len(inst_ids), 6, dtype=np.int32)
 
         n_total = len(centers)
+
+        # Log per-instance classification summary.
+        unique_insts = np.unique(inst_ids.astype(int))
+        inst_summary = []
+        for iid in unique_insts:
+            cls_id = int(sem_class_raw[inst_ids == iid][0])
+            n_grasps_inst = int((inst_ids == iid).sum())
+            inst_summary.append(f"inst_{iid}={CLASS_NAMES.get(cls_id, '?')}(id={cls_id}, {n_grasps_inst}g)")
+        self.get_logger().info(
+            f"[INSTANCES] {len(unique_insts)} instance(s): {', '.join(inst_summary)} | total_grasps={n_total}"
+        )
 
         mask = scores >= self.score_threshold
         rot_filtered     = rot_matrices[mask]

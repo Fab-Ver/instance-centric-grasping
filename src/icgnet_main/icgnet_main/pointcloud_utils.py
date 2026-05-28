@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 
 import numpy as np
-import open3d as o3d
 import torch
 
 
@@ -100,6 +99,7 @@ def process_point_cloud(
         if points_np.shape[0] == 0:
             return np.array([]).reshape(0, 3), np.array([]).reshape(0, 3)
 
+    import open3d as o3d
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(points_np)
     pcd = pcd.voxel_down_sample(voxel_size=config.voxel_size)

@@ -2,7 +2,7 @@ grasp_executor_node:
   ros__parameters:
     rich_grasp_topic: '/icgnet/grasps_rich'
     compute_grasp_service: '/icgnet/compute_grasps'
-    default_min_score: 0.4
+    default_min_score: 0.5
     default_max_attempts: 5
     approach_offset: 0.10
     grasp_forward_offset: 0.04
@@ -10,7 +10,7 @@ grasp_executor_node:
     approach_acceleration: 0.05
     lift_velocity: 0.10
     lift_acceleration: 0.10
-    cartesian_fraction_threshold: 0.85
+    cartesian_fraction_threshold: 0.92
     cartesian_max_step_approach: 0.008
     cartesian_max_step_micro: 0.003
     pregrasp_settle_time: 0.8
