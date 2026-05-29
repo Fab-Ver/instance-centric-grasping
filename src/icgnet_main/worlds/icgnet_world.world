@@ -75,5 +75,10 @@
     <plugin name="gazebo_ros_state" filename="libgazebo_ros_state.so">
       <update_rate>1.0</update_rate>
     </plugin>
+
+    <!-- Exposes /attach and /detach services to weld grasped objects to the gripper.
+         Required because the position-controlled (kinematic) arm does not transfer
+         friction force to lift objects. -->
+    <plugin name="gazebo_model_attachment" filename="libgazebo_model_attachment_plugin_lib.so"/>
   </world>
 </sdf>

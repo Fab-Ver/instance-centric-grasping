@@ -23,6 +23,7 @@
   <depend>robot_state_publisher</depend>
   <depend>xacro</depend>
   <depend>icgnet_msgs</depend>
+  <depend>gazebo_model_attachment_plugin_msgs</depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
