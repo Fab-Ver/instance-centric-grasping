@@ -11,8 +11,9 @@ controller_manager:
     panda_hand_controller:
       type: joint_trajectory_controller/JointTrajectoryController
 
-# Arm: position command interface. gazebo_ros2_control SetPosition = rigid/accurate tracking,
-# no gravity-fight, no PID tuning needed. Gripper stays effort for contact force.
+# Arm: position command interface.
+# gz/DART handles dynamics internally — no PID gains required.
+# JTC forwards desired positions from MoveIt2 TOPP trajectory directly to gz.
 panda_arm_controller:
   ros__parameters:
     joints:
@@ -29,20 +30,19 @@ panda_arm_controller:
     action_monitor_rate: 20.0
     allow_partial_joints_goal: false
     constraints:
-      stopped_velocity_tolerance: 0.2
-      goal_time: 2.0
-      panda_joint1: {goal: 0.15}
-      panda_joint2: {goal: 0.15}
-      panda_joint3: {goal: 0.15}
-      panda_joint4: {goal: 0.15}
-      panda_joint5: {goal: 0.15}
-      panda_joint6: {goal: 0.15}
-      panda_joint7: {goal: 0.15}
+      stopped_velocity_tolerance: 0.05
+      goal_time: 0.0
+      panda_joint1: {goal: 0.10}
+      panda_joint2: {goal: 0.10}
+      panda_joint3: {goal: 0.10}
+      panda_joint4: {goal: 0.10}
+      panda_joint5: {goal: 0.10}
+      panda_joint6: {goal: 0.10}
+      panda_joint7: {goal: 0.10}
 
-# Gripper: effort command + PID gains.
-# Position command (SetPosition) bypasses ODE physics — no contact normal force →
-# no friction → object slips during lift. Effort+PID applies a real closing force
-# (F = kp×error) that generates the normal force required for stable grasping.
+# Gripper: effort command + PID gains — applies continuous closing force.
+# PID ensures the finger applies gripping force even when blocked by an object.
+# goal_tolerance=0.04 (max finger pos) so JTC never aborts on contact.
 panda_hand_controller:
   ros__parameters:
     joints:
@@ -54,17 +54,10 @@ panda_hand_controller:
     action_monitor_rate: 20.0
     allow_partial_joints_goal: false
     gains:
-      # p=3000 N/m: at error=0.007m (beer_can: gripper 80mm, can dia 66mm → 7mm gap/finger)
-      # → 21N → capped at URDF limit 20N → immediate full force from first control cycle
-      # kd=20 damps closing oscillations; i accumulates for steady-state hold
       panda_finger_joint1: {p: 3000.0, i: 50.0, d: 20.0, i_clamp: 100.0}
       panda_finger_joint2: {p: 3000.0, i: 50.0, d: 20.0, i_clamp: 100.0}
     constraints:
       stopped_velocity_tolerance: 0.05
       goal_time: 5.0
-      # 0.04 = max finger pos: JTC never aborts (blocked by object = within tolerance).
-      # Without this, the JTC aborts when object blocks fingers at 7mm (> 5mm old tolerance),
-      # drops effort to 0, and the gripper opens → object drops. With 0.04 tolerance,
-      # PID continuously applies closing force regardless of object contact.
       panda_finger_joint1: {goal: 0.04}
       panda_finger_joint2: {goal: 0.04}

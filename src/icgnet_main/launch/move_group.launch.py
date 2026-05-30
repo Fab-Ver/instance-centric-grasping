@@ -24,6 +24,10 @@ def generate_launch_description():
 
     with open(urdf_path) as f:
         robot_description_content = f.read()
+    # Expand $(find panda_description) so MoveIt collision meshes resolve correctly.
+    robot_description_content = robot_description_content.replace(
+        '$(find panda_description)', pkg_panda
+    )
     with open(srdf_path) as f:
         robot_description_semantic_content = f.read()
 

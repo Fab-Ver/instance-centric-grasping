@@ -146,8 +146,9 @@ class ObjectSpawner(Node):
         spawn_z = half_h + 0.002
 
         cmd = [
-            'ros2', 'run', 'gazebo_ros', 'spawn_entity.py',
-            '-entity', entity_name,
+            'ros2', 'run', 'ros_gz_sim', 'create',
+            '-world', 'icgnet_world',
+            '-name', entity_name,
             '-x', f'{x:.3f}', '-y', f'{y:.3f}', '-z', f'{spawn_z:.4f}',
             '-Y', f'{yaw:.3f}',
         ]
@@ -156,9 +157,8 @@ class ObjectSpawner(Node):
             cmd += ['-file', matches[0]]
         else:
             self.get_logger().warn(
-                f"Local SDF for '{model_name}' not found, falling back to Gazebo database."
+                f"Local SDF for '{model_name}' not found — cannot fall back to database in gz-sim."
             )
-            cmd += ['-database', model_name]
 
         self.get_logger().info(f'[{entity_name}] Spawning {model_name} at ({x:.2f}, {y:.2f})...')
 

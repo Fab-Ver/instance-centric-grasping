@@ -8,12 +8,18 @@
     <license>BSD</license>
 
     <depend>hardware_interface</depend>
-    <depend>gazebo_ros2_control</depend>
+    <depend>gz_ros2_control</depend>
+    <depend>ign_ros2_control</depend>
+    <!-- Both gz_ros2_control and ign_ros2_control are provided by ros-humble-ign-ros2-control;
+         gz_ros2_control is the active plugin (panda.urdf uses gz_ros2_control-system).
+         ign_ros2_control kept for compatibility as both .so files ship together. -->
 
     <exec_depend>joint_state_publisher_gui</exec_depend>
     <exec_depend>robot_state_publisher</exec_depend>
     <exec_depend>rviz2</exec_depend>
     <exec_depend>rclpy</exec_depend>
+    <exec_depend>ros_gz_sim</exec_depend>
+    <exec_depend>ros_gz_bridge</exec_depend>
 
     <test_depend>ament_lint_auto</test_depend>
     <test_depend>ament_lint_common</test_depend>

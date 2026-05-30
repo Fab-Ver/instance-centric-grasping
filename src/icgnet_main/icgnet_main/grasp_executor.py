@@ -4,9 +4,9 @@ from threading import Lock, Thread
 import numpy as np
 import rclpy
 import rclpy.duration
-from gazebo_model_attachment_plugin_msgs.srv import Attach, Detach
-from gazebo_msgs.srv import SetEntityState
 from geometry_msgs.msg import Point
+from ros_gz_interfaces.msg import Entity
+from ros_gz_interfaces.srv import SetEntityPose
 from moveit_msgs.msg import (
     AllowedCollisionEntry, AllowedCollisionMatrix, CollisionObject,
     PlanningScene, PlanningSceneComponents,
@@ -67,16 +67,6 @@ class GraspExecutorNode(Node):
         self.declare_parameter('object_init_y', 0.0)
         self.declare_parameter('object_init_z', 0.05)
 
-        # Gazebo physical attach (fixed joint object↔gripper during lift).
-        # Position interface is kinematic (SetPosition) and does not transfer
-        # friction force, so a fixed joint is required to carry the object.
-        self.declare_parameter('robot_model_name', 'panda')
-        # Gazebo lumps fixed-joint child links into their movable parent, so
-        # 'panda_hand' does not exist as a Gazebo link — weld to the finger instead.
-        self.declare_parameter('attach_link', 'panda_leftfinger')
-        self.declare_parameter('object_link_name', 'link')
-        self.declare_parameter('attach_joint_name', 'icgnet_grasp_joint')
-
         self._approach_offset = self.get_parameter('approach_offset').get_parameter_value().double_value
         self._grasp_forward_offset = self.get_parameter('grasp_forward_offset').get_parameter_value().double_value
         self._approach_velocity = self.get_parameter('approach_velocity').get_parameter_value().double_value
@@ -93,10 +83,6 @@ class GraspExecutorNode(Node):
         self._object_init_x = self.get_parameter('object_init_x').get_parameter_value().double_value
         self._object_init_y = self.get_parameter('object_init_y').get_parameter_value().double_value
         self._object_init_z = self.get_parameter('object_init_z').get_parameter_value().double_value
-        self._robot_model_name = self.get_parameter('robot_model_name').get_parameter_value().string_value
-        self._attach_link = self.get_parameter('attach_link').get_parameter_value().string_value
-        self._object_link_name = self.get_parameter('object_link_name').get_parameter_value().string_value
-        self._attach_joint_name = self.get_parameter('attach_joint_name').get_parameter_value().string_value
         self._workspace_bounds = {
             'x': (self.get_parameter('workspace_x_min').get_parameter_value().double_value,
                   self.get_parameter('workspace_x_max').get_parameter_value().double_value),
@@ -184,11 +170,8 @@ class GraspExecutorNode(Node):
         self._current_grasp_pub = self.create_publisher(MarkerArray, '/icgnet/current_grasp_marker', 1)
 
         self._set_entity_client = self.create_client(
-            SetEntityState, '/set_entity_state', callback_group=cb_svc
+            SetEntityPose, '/world/icgnet_world/set_pose', callback_group=cb_svc
         )
-
-        self._attach_client = self.create_client(Attach, '/gazebo/attach', callback_group=cb_svc)
-        self._detach_client = self.create_client(Detach, '/gazebo/detach', callback_group=cb_svc)
 
         self._apply_scene_client = self.create_client(
             ApplyPlanningScene, '/apply_planning_scene', callback_group=cb_svc
@@ -209,41 +192,7 @@ class GraspExecutorNode(Node):
         with self._grasps_lock:
             self._latest_grasps = msg
 
-    def _gazebo_attach(self) -> bool:
-        """Weld the target object to the gripper link via a Gazebo fixed joint."""
-        if not self._attach_client.wait_for_service(timeout_sec=2.0):
-            self.get_logger().warn('[ATTACH] /attach service not available.')
-            return False
-        req = Attach.Request()
-        req.joint_name = self._attach_joint_name
-        req.model_name_1 = self._robot_model_name
-        req.link_name_1 = self._attach_link
-        req.model_name_2 = self._object_entity_name
-        req.link_name_2 = self._object_link_name
-        fut = self._attach_client.call_async(req)
-        if not self._wait_for_future(fut):
-            self.get_logger().warn('[ATTACH] /attach timed out.')
-            return False
-        if not fut.result().success:
-            self.get_logger().warn(f'[ATTACH] failed: {fut.result().message}')
-            return False
-        return True
-
-    def _gazebo_detach(self) -> None:
-        """Remove the Gazebo fixed joint. Idempotent — safe if nothing is attached."""
-        if not self._detach_client.wait_for_service(timeout_sec=2.0):
-            return
-        req = Detach.Request()
-        req.joint_name = self._attach_joint_name
-        req.model_name_1 = self._robot_model_name
-        req.model_name_2 = self._object_entity_name
-        self._wait_for_future(self._detach_client.call_async(req))
-
     def _reset_scene(self):
-        # Release any physical grasp joint before teleporting the object back,
-        # otherwise the weld fights the set_entity_state reset.
-        self._gazebo_detach()
-
         self.get_logger().info('[RESET] Opening gripper...')
         self._gripper.open()
         self._gripper.wait_until_executed()
@@ -260,13 +209,13 @@ class GraspExecutorNode(Node):
             self.get_logger().warn('[RESET] Arm home move failed (continuing anyway).')
 
         if self._set_entity_client.wait_for_service(timeout_sec=2.0):
-            req = SetEntityState.Request()
-            req.state.name = self._object_entity_name
-            req.state.pose.position.x = self._object_init_x
-            req.state.pose.position.y = self._object_init_y
-            req.state.pose.position.z = self._object_init_z
-            req.state.pose.orientation.w = 1.0
-            req.state.reference_frame = 'world'
+            req = SetEntityPose.Request()
+            req.entity.name = self._object_entity_name
+            req.entity.type = Entity.MODEL
+            req.pose.position.x = self._object_init_x
+            req.pose.position.y = self._object_init_y
+            req.pose.position.z = self._object_init_z
+            req.pose.orientation.w = 1.0
             fut = self._set_entity_client.call_async(req)
             if not self._wait_for_future(fut):
                 self.get_logger().warn('[RESET] Object reset timed out.')
@@ -278,7 +227,7 @@ class GraspExecutorNode(Node):
             else:
                 self.get_logger().warn('[RESET] Object reset service returned failure.')
         else:
-            self.get_logger().warn('[RESET] /set_entity_state service not available — object not reset.')
+            self.get_logger().warn('[RESET] /world/icgnet_world/set_pose not available — object not reset.')
 
     def _execute_grasp_cb(self, req: ExecuteGrasp.Request, res: ExecuteGrasp.Response):
         target = req.target.strip() if req.target else 'any'
@@ -760,14 +709,6 @@ class GraspExecutorNode(Node):
             except Exception as e:
                 self.get_logger().warn(f"[STEP 3b] Attach failed (non-fatal): {e}")
 
-        # Physical fixed joint so the kinematic (position-controlled) arm carries
-        # the object during the lift. Gated by the Step 3 gap check above, so the
-        # weld only happens when the gripper actually closed on the object.
-        if self._gazebo_attach():
-            self.get_logger().info(
-                f"[STEP 3b] Welded '{self._object_entity_name}' to {self._attach_link}"
-            )
-
         # ── Step 4/5: Cartesian lift (straight +Z from grasp position) ────────
         # Cartesian path prevents the STATUS_ABORTED that occurs when joint-space
         # planning cannot find an IK solution from the extended grasp configuration.
@@ -786,7 +727,6 @@ class GraspExecutorNode(Node):
         dt = time.time() - t0
         if not ok:
             self.get_logger().warn(f"[STEP 4/5] LIFT FAILED in {dt:.2f}s")
-            self._gazebo_detach()
             if self._use_collision_scene:
                 try:
                     self._arm.detach_collision_object(id=target_co_id)
@@ -810,7 +750,6 @@ class GraspExecutorNode(Node):
                 f"[STEP 4/5 POST-CHECK] Object lost during lift "
                 f"(gap={finger_gap_post*1000:.1f}mm, expected [{self._min_finger_gap*1000:.0f}–{self._max_finger_gap*1000:.0f}mm]) — reporting failure"
             )
-            self._gazebo_detach()
             if self._use_collision_scene:
                 try:
                     self._arm.detach_collision_object(id=target_co_id)

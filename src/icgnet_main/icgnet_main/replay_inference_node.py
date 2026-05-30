@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import time
 
 import rclpy
@@ -9,7 +10,6 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from rclpy.serialization import deserialize_message
 
-from gazebo_msgs.srv import SpawnEntity
 from moveit_msgs.msg import CollisionObject
 from icgnet_msgs.msg import GraspArray
 from std_srvs.srv import Trigger
@@ -35,7 +35,6 @@ class ReplayInferenceNode(Node):
 
         self._grasps_pub = self.create_publisher(GraspArray, '/icgnet/grasps_rich', 10)
         self._co_pub = self.create_publisher(CollisionObject, '/collision_object', qos_reliable)
-        self._spawn_client = self.create_client(SpawnEntity, '/spawn_entity', callback_group=cb)
 
         self.create_service(Trigger, '/icgnet/compute_grasps', self._trigger_cb, callback_group=cb)
 
@@ -74,12 +73,12 @@ class ReplayInferenceNode(Node):
             return response
 
         if self._spawn_object_flag:
-            self._try_spawn_object()
+            self._spawn_object()
 
         for co in self._collision_objects:
             self._co_pub.publish(co)
 
-        # Let collision objects reach move_group before publishing grasps
+        # Let collision objects reach move_group before publishing grasps.
         time.sleep(0.2)
 
         self._grasps_pub.publish(self._grasps)
@@ -92,37 +91,39 @@ class ReplayInferenceNode(Node):
         self.get_logger().info(response.message)
         return response
 
-    def _try_spawn_object(self):
+    def _spawn_object(self):
+        """Spawn the saved object into gz-sim via ros_gz_sim create."""
         sdf_path = self._meta.get('object_sdf_path', '')
         if not sdf_path or not os.path.exists(sdf_path):
-            return
-
-        if not self._spawn_client.wait_for_service(timeout_sec=2.0):
-            self.get_logger().warn('SpawnEntity service unavailable — skipping object spawn.')
+            self.get_logger().warn(f'SDF not found: {sdf_path!r} — skipping object spawn.')
             return
 
         pose = self._meta.get('object_pose', {})
-        req = SpawnEntity.Request()
-        req.name = self._meta.get('object_name', 'target_obj')
-        with open(sdf_path) as f:
-            req.xml = f.read()
-        req.initial_pose.position.x = float(pose.get('x', 0.65))
-        req.initial_pose.position.y = float(pose.get('y', 0.0))
-        req.initial_pose.position.z = float(pose.get('z', 0.05))
+        name = self._meta.get('object_name', 'target_obj')
+        x = float(pose.get('x', 0.65))
+        y = float(pose.get('y', 0.0))
+        z = float(pose.get('z', 0.05))
 
-        future = self._spawn_client.call_async(req)
-        deadline = time.time() + 5.0
-        while not future.done() and time.time() < deadline:
-            time.sleep(0.05)
+        cmd = [
+            'ros2', 'run', 'ros_gz_sim', 'create',
+            '-world', 'icgnet_world',
+            '-name', name,
+            '-file', sdf_path,
+            '-x', f'{x:.3f}', '-y', f'{y:.3f}', '-z', f'{z:.4f}',
+        ]
 
-        if future.done():
-            result = future.result()
-            if result.success:
-                self.get_logger().info(f'Spawned {req.name}.')
+        self.get_logger().info(f'Spawning {name} at ({x:.2f}, {y:.2f}, {z:.4f})...')
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            for line in proc.stdout:
+                self.get_logger().info(f'[spawn] {line.rstrip()}')
+            proc.wait()
+            if proc.returncode == 0:
+                self.get_logger().info(f'Spawned {name}.')
             else:
-                self.get_logger().warn(f'SpawnEntity: {result.status_message}')
-        else:
-            self.get_logger().warn('SpawnEntity timed out.')
+                self.get_logger().warn(f'Spawn failed (exit {proc.returncode}).')
+        except Exception as e:
+            self.get_logger().error(f'Spawn exception: {e}')
 
 
 def main(args=None):

@@ -27,7 +27,7 @@
             <torsional><coefficient>0.5</coefficient><surface_radius>0.01</surface_radius></torsional>
           </friction>
           <contact>
-            <ode><kp>1e6</kp><kd>50</kd><min_depth>0.001</min_depth><max_vel>0.1</max_vel></ode>
+            <ode><kp>1e6</kp><kd>50</kd><min_depth>0.001</min_depth><max_vel>0.01</max_vel></ode>
           </contact>
         </surface>
       </collision>
@@ -39,10 +39,8 @@
           </mesh>
         </geometry>
         <material>
-          <script>
-            <uri>file://media/materials/scripts/gazebo.material</uri>
-            <name>Gazebo/GreyTransparent</name>
-          </script>
+          <ambient>0.8 0.8 0.8 0.7</ambient>
+          <diffuse>0.8 0.8 0.8 0.7</diffuse>
         </material>
       </visual>
 

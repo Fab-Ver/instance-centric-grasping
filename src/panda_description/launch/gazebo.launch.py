@@ -1,103 +1,108 @@
-from ament_index_python.packages import get_package_share_directory
-import launch
-from launch.substitutions import Command, LaunchConfiguration
-from launch.actions import IncludeLaunchDescription, SetEnvironmentVariable, TimerAction
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-import launch_ros
 import os
+
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import (
+    DeclareLaunchArgument,
+    IncludeLaunchDescription,
+    TimerAction,
+)
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    use_sim_time = LaunchConfiguration('use_sim_time', default='false')
-    pkg_share = launch_ros.substitutions.FindPackageShare(package='panda_description').find('panda_description')
-    default_model_path = os.path.join(pkg_share, 'description', 'models')
-    default_urdf_path = os.path.join(default_model_path, 'panda', 'panda.urdf')
-    default_rviz_config_path = os.path.join(pkg_share, 'rviz/rviz.rviz')
+    use_sim_time = LaunchConfiguration('use_sim_time', default='true')
     world = LaunchConfiguration('world', default='')
 
-    gzclient = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(get_package_share_directory('gazebo_ros'), 'launch', 'gzclient.launch.py')
-        ),
-        launch_arguments={'verbose': 'true'}.items(),
+    pkg_panda = get_package_share_directory('panda_description')
+    pkg_ros_gz_sim = get_package_share_directory('ros_gz_sim')
+
+    urdf_path = os.path.join(
+        pkg_panda, 'description', 'models', 'panda', 'panda.urdf'
     )
-    gzserver = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(get_package_share_directory('gazebo_ros'), 'launch', 'gzserver.launch.py')
-        ),
-        launch_arguments={'verbose': 'true', 'world': world}.items(),
+    with open(urdf_path, 'r') as f:
+        robot_description_content = f.read()
+    # gz_ros2_control and MoveIt do not expand $(find ...) — substitute at launch time.
+    robot_description_content = robot_description_content.replace(
+        '$(find panda_description)', pkg_panda
     )
-    robot_state_publisher_node = launch_ros.actions.Node(
+
+    rviz_config = os.path.join(pkg_panda, 'rviz', 'rviz.rviz')
+
+    # Gz-sim: server + GUI with OGRE1 renderer (WSL2 compatible).
+    # Removing -s runs server+GUI together. render_engine ogre avoids OGRE2 crash on WSL2.
+    gz_sim = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(pkg_ros_gz_sim, 'launch', 'gz_sim.launch.py')
+        ),
+        launch_arguments={
+            'gz_args': [world, ' -r --render-engine ogre'],
+        }.items(),
+    )
+
+    robot_state_publisher = Node(
         package='robot_state_publisher',
         executable='robot_state_publisher',
         output='both',
         parameters=[{
             'use_sim_time': use_sim_time,
-            'robot_description': Command(['xacro ', LaunchConfiguration('model')]),
+            'robot_description': robot_description_content,
         }],
     )
-    rviz_node = launch_ros.actions.Node(
+
+    rviz = Node(
         package='rviz2',
         executable='rviz2',
         name='rviz2',
         output='log',
-        arguments=['-d', LaunchConfiguration('rvizconfig')],
+        arguments=['-d', rviz_config],
+        parameters=[{'use_sim_time': True}],
     )
-    spawn_entity = launch_ros.actions.Node(
-        package='gazebo_ros',
-        executable='spawn_entity.py',
-        arguments=['-topic', 'robot_description', '-entity', 'panda'],
-        output='screen',
-    )
-    effort_controller_config = os.path.join(
-        get_package_share_directory('panda_description'), 'config', 'ros_control.yaml'
-    )
-    spawn_arm_controller = launch_ros.actions.Node(
-        package='controller_manager',
-        executable='spawner',
-        arguments=['panda_arm_controller', '--param-file', effort_controller_config],
-        output='screen',
-    )
-    spawn_hand_controller = launch_ros.actions.Node(
-        package='controller_manager',
-        executable='spawner',
-        arguments=['panda_hand_controller', '--param-file', effort_controller_config],
-        output='screen',
-    )
-    spawn_joint_state_broadcaster = launch_ros.actions.Node(
-        package='controller_manager',
-        executable='spawner',
-        arguments=['joint_state_broadcaster', '--controller-type', 'joint_state_broadcaster/JointStateBroadcaster'],
-        output='screen',
-    )
-    gazebo_model_path = SetEnvironmentVariable(name='GAZEBO_MODEL_PATH', value=[default_model_path])
-    gazebo_media_path = SetEnvironmentVariable(name='GAZEBO_MEDIA_PATH', value=[default_model_path])
 
-    return launch.LaunchDescription([
-        gazebo_model_path,
-        gazebo_media_path,
-        launch.actions.DeclareLaunchArgument(
-            'use_sim_time',
-            default_value='false',
-            description='Use simulation (Gazebo) clock if true',
-        ),
-        launch.actions.DeclareLaunchArgument(
-            name='model',
-            default_value=default_urdf_path,
-            description='Absolute path to robot urdf file',
-        ),
-        launch.actions.DeclareLaunchArgument(
-            name='rvizconfig',
-            default_value=default_rviz_config_path,
-            description='Absolute path to rviz config file',
-        ),
-        launch.actions.DeclareLaunchArgument('world', default_value='', description='World file'),
-        spawn_joint_state_broadcaster,
-        robot_state_publisher_node,
-        rviz_node,
-        gzclient,
-        gzserver,
-        TimerAction(period=15.0, actions=[spawn_entity]),
-        spawn_arm_controller,
-        spawn_hand_controller,
+    # Spawn the robot into gz-sim using the robot_description topic.
+    spawn_robot = Node(
+        package='ros_gz_sim',
+        executable='create',
+        arguments=[
+            '-world', 'icgnet_world',
+            '-topic', 'robot_description',
+            '-name', 'panda',
+        ],
+        output='screen',
+    )
+
+    spawn_jsb = Node(
+        package='controller_manager',
+        executable='spawner',
+        arguments=['joint_state_broadcaster'],
+        output='screen',
+    )
+
+    spawn_arm = Node(
+        package='controller_manager',
+        executable='spawner',
+        arguments=['panda_arm_controller'],
+        output='screen',
+    )
+    spawn_hand = Node(
+        package='controller_manager',
+        executable='spawner',
+        arguments=['panda_hand_controller'],
+        output='screen',
+    )
+
+    return LaunchDescription([
+        DeclareLaunchArgument('use_sim_time', default_value='true'),
+        DeclareLaunchArgument('world', default_value=''),
+        gz_sim,
+        robot_state_publisher,
+        rviz,
+        # Spawn robot after gz-sim has started (3s).
+        TimerAction(period=3.0, actions=[spawn_robot]),
+        # Controllers after robot is spawned (6s total).
+        TimerAction(period=6.0, actions=[spawn_jsb]),
+        TimerAction(period=8.0, actions=[spawn_arm]),
+        TimerAction(period=8.0, actions=[spawn_hand]),
     ])

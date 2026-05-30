@@ -23,7 +23,10 @@
   <depend>robot_state_publisher</depend>
   <depend>xacro</depend>
   <depend>icgnet_msgs</depend>
-  <depend>gazebo_model_attachment_plugin_msgs</depend>
+  <depend>pymoveit2</depend>
+  <depend>ros_gz_interfaces</depend>
+  <depend>ros_gz_sim</depend>
+  <depend>ros_gz_bridge</depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
