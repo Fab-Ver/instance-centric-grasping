@@ -108,6 +108,7 @@ class GraspExecutorNode(Node):
         self.declare_parameter('arm_default_acceleration', 0.5)
         self.declare_parameter('allowed_planning_time', 5.0)
         self.declare_parameter('num_planning_attempts', 10)
+        self.declare_parameter('inference_timeout', 120.0)
         self.declare_parameter('max_approach_angle_deg', 90.0)
         self.declare_parameter('min_approach_angle_deg', 0.0)
 
@@ -125,6 +126,7 @@ class GraspExecutorNode(Node):
         self._arm_default_acceleration = self.get_parameter('arm_default_acceleration').get_parameter_value().double_value
         self._allowed_planning_time = self.get_parameter('allowed_planning_time').get_parameter_value().double_value
         self._num_planning_attempts = self.get_parameter('num_planning_attempts').get_parameter_value().integer_value
+        self._inference_timeout = self.get_parameter('inference_timeout').get_parameter_value().double_value
         self._max_approach_angle_deg = self.get_parameter('max_approach_angle_deg').get_parameter_value().double_value
         self._min_approach_angle_deg = self.get_parameter('min_approach_angle_deg').get_parameter_value().double_value
 
@@ -184,6 +186,11 @@ class GraspExecutorNode(Node):
 
         self._saved_acm: AllowedCollisionMatrix | None = None
 
+        # Tracks the CO that is currently being managed so _reset_scene() can
+        # remove it before planning (arm may be inside the CO after a failed attempt).
+        self._active_co_id: str | None = None
+        self._active_co: CollisionObject | None = None
+
         self.create_service(ExecuteGrasp, '/icgnet/execute_grasp', self._execute_grasp_cb, callback_group=cb_grasp_exec)
 
         self.get_logger().info('GraspExecutorNode ready.')
@@ -193,6 +200,17 @@ class GraspExecutorNode(Node):
             self._latest_grasps = msg
 
     def _reset_scene(self):
+        # Remove active CO from the planning scene BEFORE any motion planning.
+        # After a failed attempt the arm may be inside or adjacent to the CO volume,
+        # making the current state appear in collision → INVALID_MOTION_PLAN on every
+        # subsequent call.  CO is re-added after the arm is safely at home.
+        if self._use_collision_scene and self._active_co_id is not None:
+            if self._active_co is None:
+                # CO may still be in the scene (e.g. Step-1 failure before fetch).
+                self._active_co = self._fetch_co_from_scene(self._active_co_id)
+            self._remove_co_from_scene(self._active_co_id)
+            time.sleep(0.15)  # let move_group process REMOVE before planning
+
         self.get_logger().info('[RESET] Opening gripper...')
         self._gripper.open()
         self._gripper.wait_until_executed()
@@ -229,6 +247,11 @@ class GraspExecutorNode(Node):
         else:
             self.get_logger().warn('[RESET] /world/icgnet_world/set_pose not available — object not reset.')
 
+        # Re-add CO so the next attempt's Step-1 planning can avoid the object.
+        if self._use_collision_scene and self._active_co is not None:
+            self._readd_co_to_scene(self._active_co)
+            self.get_logger().info(f"[RESET] Re-added CO '{self._active_co_id}' to scene.")
+
     def _execute_grasp_cb(self, req: ExecuteGrasp.Request, res: ExecuteGrasp.Response):
         target = req.target.strip() if req.target else 'any'
         min_score = req.min_score if req.min_score > 0.0 else self._default_min_score
@@ -248,9 +271,9 @@ class GraspExecutorNode(Node):
             return res
 
         future = self._compute_client.call_async(Trigger.Request())
-        if not self._wait_for_future(future):
+        if not self._wait_for_future(future, timeout=self._inference_timeout):
             res.success = False
-            res.message = "ICGNet inference timed out"
+            res.message = f"ICGNet inference timed out after {self._inference_timeout:.0f}s"
             return res
         if not future.result().success:
             res.success = False
@@ -577,6 +600,8 @@ class GraspExecutorNode(Node):
         )
 
         target_co_id = f"{self._collision_id_prefix}{g.instance_id}"
+        self._active_co_id = target_co_id
+        self._active_co = None  # will be set after CO is fetched post-Step-1
 
         per_finger_pos = min(g.width / 2.0 + self._finger_safety_margin, self._max_finger_pos)
         actual_opening = 2.0 * per_finger_pos
@@ -632,6 +657,7 @@ class GraspExecutorNode(Node):
         _target_co = None
         if self._use_collision_scene:
             _target_co = self._fetch_co_from_scene(target_co_id)
+            self._active_co = _target_co  # save so _reset_scene() can re-add after recovery
             self._remove_co_from_scene(target_co_id)
             self.get_logger().info(f"[CO] Removed '{target_co_id}' from scene for approach")
 
@@ -656,7 +682,7 @@ class GraspExecutorNode(Node):
             self.get_logger().warn(
                 f"[STEP 2/5] APPROACH FAILED in {dt:.2f}s — aborting this candidate"
             )
-            self._readd_co_to_scene(_target_co)
+            # CO stays absent: _reset_scene() will re-add it after moving home.
             return self._abort_grasp(target_co_id)
         self.get_logger().info(f"[STEP 2/5] Contact surface reached in {dt:.2f}s")
 
@@ -681,14 +707,14 @@ class GraspExecutorNode(Node):
                 f"[STEP 3/5] Gripper fully closed (gap={finger_gap*1000:.1f}mm < "
                 f"{self._min_finger_gap*1000:.0f}mm) — missed object"
             )
-            self._readd_co_to_scene(_target_co)
+            # CO stays absent: _reset_scene() will re-add it after moving home.
             return self._abort_grasp(target_co_id)
         if finger_gap > self._max_finger_gap:
             self.get_logger().warn(
                 f"[STEP 3/5] Gripper barely closed (gap={finger_gap*1000:.1f}mm > "
                 f"{self._max_finger_gap*1000:.0f}mm) — object tipped or controller aborted"
             )
-            self._readd_co_to_scene(_target_co)
+            # CO stays absent: _reset_scene() will re-add it after moving home.
             return self._abort_grasp(target_co_id)
         self.get_logger().info(
             f"[STEP 3/5] Object confirmed between fingers "
@@ -783,6 +809,9 @@ class GraspExecutorNode(Node):
             except Exception as e:
                 self.get_logger().warn(f"[STEP 6] Detach/remove failed (non-fatal): {e}")
             self._restore_acm(target_co_id)
+
+        self._active_co_id = None
+        self._active_co = None
 
         return True  # lift succeeded — object was grasped and raised
 

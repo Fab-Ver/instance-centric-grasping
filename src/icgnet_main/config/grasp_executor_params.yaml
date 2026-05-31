@@ -81,3 +81,8 @@ grasp_executor_node:
 
     # Number of planning attempts before declaring failure.
     num_planning_attempts: 10
+
+    # ── ICGNet inference timeout ──────────────────────────────────────────────
+    # Max seconds to wait for /icgnet/compute_grasps to return.
+    # ICGNet with return_meshes=True (marching cubes) on a small GPU takes 20–60 s.
+    inference_timeout: 120.0

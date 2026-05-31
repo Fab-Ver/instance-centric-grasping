@@ -1,8 +1,8 @@
 # Testing Guide — ICGNet ROS2 Gazebo Sim Fortress
 
-**Branch:** `improved_version_to_test`
+**Branch:** `main`
 **Stack:** ROS2 Humble + Gazebo Sim Fortress (gz-sim 6, DART physics) + MoveIt2 + gz_ros2_control
-**Last updated:** 2026-05-30
+**Last updated:** 2026-05-31
 
 ---
 
@@ -49,22 +49,44 @@ source install/setup.bash
 
 ---
 
+## Rendering — choose your mode before launching
+
+The launch file exposes a `use_gpu` argument that selects the Gazebo rendering backend.
+No environment variables need to be set manually — the launch file handles everything.
+
+| `use_gpu` | Who | Backend | Notes |
+|-----------|-----|---------|-------|
+| `false` (default) | Everyone without a GPU | LLVMpipe (CPU software) + `OGRE_RTT_MODE=Copy` | Works on any machine; slower fps but stable |
+| `true` | WSL2 + NVIDIA GPU | Mesa D3D12 hardware | Requires `d3d12_dri.so` (Mesa 23.2+) and `/usr/lib/wsl/lib/libd3d12.so` |
+
+---
+
 ## Terminal Sequence
 
 All terminals: start from `~/instance-centric-grasping` and source the environment first.
 
 ### T1 — Simulation + MoveIt2 + Camera bridge + TF
 
+**Without GPU (default — works for everyone):**
+
 ```bash
 cd ~/instance-centric-grasping
 source /opt/ros/humble/setup.bash && source install/setup.bash
-LIBGL_ALWAYS_SOFTWARE=1 ros2 launch icgnet_main world.launch.py
+ros2 launch icgnet_main world.launch.py
+```
+
+**With GPU (WSL2 + NVIDIA):**
+
+```bash
+cd ~/instance-centric-grasping
+source /opt/ros/humble/setup.bash && source install/setup.bash
+ros2 launch icgnet_main world.launch.py use_gpu:=true
 ```
 
 Wait for:
-- gz-sim started (GUI opens on native Linux; headless on WSL2)
+- Gazebo GUI window opens (OGRE1 renderer)
 - `[controller_manager]` ready
-- `[move_group]` `Ready to take commands for planning group arm.`
+- `[move_group]` → `Ready to take commands for planning group arm.`
 - `[gz_ros_bridge]` publishing (camera sensor init takes ~10 s)
 
 ### T2 — Spawn object (after T1 ready, ~15 s)
@@ -104,7 +126,7 @@ ros2 launch icgnet_main icgnet_inference.launch.py
 
 **B — Without GPU (replay saved inference data)**
 
-> Prerequisite: generate `~/icgnet_inference_data/` first (see Save Inference section).
+> Prerequisite: generate `~/icgnet_inference_data/` first on a GPU machine (see Save Inference section).
 
 ```bash
 cd ~/instance-centric-grasping
@@ -131,8 +153,8 @@ ros2 service call /icgnet/compute_grasps std_srvs/srv/Trigger
 
 # Step 2: execute grasp
 ros2 service call /icgnet/execute_grasp icgnet_msgs/srv/ExecuteGrasp "{target: 'any'}"
-# or target a semantic class:
-source /opt/ros/humble/setup.bash && source install/setup.bash
+
+# Or target a specific semantic class:
 ros2 service call /icgnet/execute_grasp icgnet_msgs/srv/ExecuteGrasp "{target: 'can'}"
 ```
 
@@ -204,7 +226,7 @@ grep -rIE "gazebo_ros|gazebo_msgs|spawn_entity\.py|panda_controllers" \
 ## Object Management
 
 ```bash
-# Delete object from gz-sim (gz-native, NOT gazebo_msgs/DeleteEntity):
+# Delete object from gz-sim:
 ros2 service call /world/icgnet_world/remove ros_gz_interfaces/srv/DeleteEntity \
   "{entity: {name: 'target_obj', type: 2}}"
 
@@ -218,15 +240,18 @@ ros2 service call /world/icgnet_world/set_pose ros_gz_interfaces/srv/SetEntityPo
 ## Expected Grasp Log Sequence
 
 ```
-[FILTER]  N grasps pass score>=0.40  [0.41–0.87]
-[PLAN]    score=0.752  inst=0  cls=2  width=0.0712m
-[PRE-0]   gripper → pre-grasp width=35.6mm  (ICGNet=71.2mm/2 + 10mm)
-[STEP 1/5] PRE-GRASP  → [x, y, z-0.12]
-[STEP 2/5] APPROACH   → [x, y, z]   fraction=1.00
+[FILTER]  N grasps pass score>=0.50  [0.51–0.84]  angle=[0°–45°]
+[PLAN]    score=0.844  inst=0  cls=2(can)  width=0.0800m
+[GRIPPER] pre-grasp opening=80.0mm (per finger=40.0mm) [CAPPED]
+[RESET]   Re-added CO 'icgnet_inst_0' to scene.
+[STEP 1/5] PRE-GRASP  → [x, y, z+0.12]   Pre-grasp reached in Xs
+[CO]      Removed 'icgnet_inst_0' from scene for approach
+[STEP 2/5] APPROACH   → [x, y, z]   Contact surface reached in Xs
 [STEP 3/5] CLOSING GRIPPER  gap=21.3mm  ✓
 [STEP 3b]  Attached 'icgnet_inst_0' to panda_hand_tcp
-[STEP 4/5] LIFTING    → [x, y, z+0.25]
+[STEP 4/5] LIFTING    → [x, y, z+0.25]   Object lifted in Xs
 [STEP 5/5] HOME
+[STEP 6]   Detached and removed 'icgnet_inst_0'
 [SUCCESS]  Grasp completed on attempt 1/5
 ```
 
@@ -234,14 +259,19 @@ ros2 service call /world/icgnet_world/set_pose ros_gz_interfaces/srv/SetEntityPo
 
 ## Known Issues
 
-| Symptom | Cause | Fix |
+| Symptom | Cause | Fix / Status |
 |---|---|---|
+| Attempts 2–5 all `INVALID_MOTION_PLAN` after attempt 1 fails | After gap-check failure, CO was re-added while arm is at contact_pos → start state in collision | **Fixed 2026-05-31**: `_reset_scene()` removes CO before any planning, re-adds after arm is home |
+| Gazebo grey screen with software rendering | OGRE1 FBO render-to-texture fails with LLVMpipe | **Fixed 2026-05-31**: `OGRE_RTT_MODE=Copy` injected automatically when `use_gpu:=false` |
+| Gazebo extreme lag without `use_gpu:=true` on WSL2+GPU | Mesa falls back to softpipe instead of D3D12 | Use `use_gpu:=true` to force Mesa D3D12 hardware path |
 | STEP 2 fraction < 0.92 | Collision object blocks Cartesian path | Executor auto-tries next grasp candidate |
 | Finger gap < 5 mm after close | Grasp pose miss or object out of workspace | Executor auto-tries next candidate |
-| Camera pointcloud silent after 30 s | Sensor thread still init | Wait; bridge auto-reconnects |
+| Finger gap > 36 mm after close | Object tipped during approach or gripper PID slow to engage | Check approach angle; `gripper_read_settle` in YAML controls settle time |
+| Camera pointcloud silent after 30 s | Sensor thread still initialising | Wait; bridge auto-reconnects |
 | `list_controllers` shows 0 | Controllers not yet spawned (~8 s after gz-sim start) | Wait and retry |
-| Spawn error "entity already exists" | Previous target_obj still in world | Delete first (see Object Management) |
-| Lift fails, object drops | Friction-based lift; DART contact may be insufficient | Check finger gap > 5 mm; if consistently fails, see weld fallback at tag `weld-fallback b374f0e` |
+| Spawn error "entity already exists" | Previous `target_obj` still in world | Delete first (see Object Management) |
+| Lift fails, object drops | Friction-based lift; DART contact insufficient | Check finger gap > 5 mm; fallback: weld at tag `weld-fallback b374f0e` |
+| Return HOME after lift unstable | MoveIt2 planning from post-grasp config occasionally fails | Open issue — observed 2026-05-30; under investigation |
 
 ---
 
@@ -249,7 +279,7 @@ ros2 service call /world/icgnet_world/set_pose ros_gz_interfaces/srv/SetEntityPo
 
 | Gate | Test | Status |
 |------|------|--------|
-| #1 Static hold | Robot spawns in compact-home pose, no oscillation for 10 s | ❌ Run T1, check `ros2 topic echo /joint_states` |
-| #2 Pre-grasp no abort | STEP 1 completes without `GOAL_TOLERANCE_VIOLATED` | ❌ Run full T1–T5 |
-| #3 Grasp + lift | Object lifted ≥ 0.25 m by friction (no weld) | ❌ Blocked on gate #2 |
-| GSR ≥ 5 runs | Count successes across 5 single-object attempts | ❌ Blocked on gate #2 |
+| #1 Static hold | Robot spawns in compact-home pose, no oscillation for 10 s | ✅ Confirmed 2026-05-30 |
+| #2 Pre-grasp no abort | STEP 1 completes without `GOAL_TOLERANCE_VIOLATED` | ✅ Confirmed 2026-05-30 |
+| #3 Grasp + lift | Object lifted ≥ 0.25 m by friction (no weld) | ✅ Confirmed 2026-05-30 — 2/2 successful |
+| GSR ≥ 5 runs | Count successes across ≥ 5 single-object attempts | 🔧 In progress — blocked on return-HOME stability |

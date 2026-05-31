@@ -2,12 +2,15 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, SetEnvironmentVariable
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetEnvironmentVariable
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
 def generate_launch_description():
+    use_gpu = LaunchConfiguration('use_gpu', default='false')
+
     pkg_icgnet_main = get_package_share_directory('icgnet_main')
     pkg_panda = get_package_share_directory('panda_description')
 
@@ -24,12 +27,26 @@ def generate_launch_description():
     return LaunchDescription([
         set_gz_resource_path,
 
+        DeclareLaunchArgument(
+            'use_gpu',
+            default_value='false',
+            description=(
+                'Rendering backend: '
+                'true = Mesa D3D12 GPU (WSL2 + NVIDIA GPU); '
+                'false = LLVMpipe software renderer (default, works on any machine)'
+            ),
+        ),
+
         # Gazebo Sim (Fortress) + robot + controllers
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 os.path.join(pkg_panda, 'gazebo.launch.py')
             ),
-            launch_arguments={'world': world_path, 'use_sim_time': 'true'}.items(),
+            launch_arguments={
+                'world': world_path,
+                'use_sim_time': 'true',
+                'use_gpu': use_gpu,
+            }.items(),
         ),
 
         # MoveIt2 move_group + planning pipeline

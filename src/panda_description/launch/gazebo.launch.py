@@ -5,8 +5,10 @@ from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
+    SetEnvironmentVariable,
     TimerAction,
 )
+from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -15,6 +17,7 @@ from launch_ros.actions import Node
 def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time', default='true')
     world = LaunchConfiguration('world', default='')
+    use_gpu = LaunchConfiguration('use_gpu', default='false')
 
     pkg_panda = get_package_share_directory('panda_description')
     pkg_ros_gz_sim = get_package_share_directory('ros_gz_sim')
@@ -31,8 +34,33 @@ def generate_launch_description():
 
     rviz_config = os.path.join(pkg_panda, 'rviz', 'rviz.rviz')
 
+    # ── Rendering environment (use_gpu:=true / false) ────────────────────────
+    #
+    # use_gpu:=true  (WSL2 + NVIDIA GPU)
+    #   MESA_LOADER_DRIVER_OVERRIDE=d3d12  →  force Mesa D3D12 Gallium driver;
+    #   without this, Mesa may silently fall back to softpipe when the D3D12
+    #   adapter is slow to initialise, causing 30 s input lag.
+    #   Prerequisites: d3d12_dri.so (Mesa 23.2+) + /usr/lib/wsl/lib/libd3d12.so
+    #
+    # use_gpu:=false  (no GPU, any machine — DEFAULT)
+    #   LIBGL_ALWAYS_SOFTWARE=1   →  force LLVMpipe (CPU software renderer)
+    #   OGRE_RTT_MODE=Copy        →  prevent OGRE1 grey screen on virtual/WSL2
+    #                                displays; FBO mode fails with LLVMpipe
+    set_mesa_d3d12 = SetEnvironmentVariable(
+        name='MESA_LOADER_DRIVER_OVERRIDE', value='d3d12',
+        condition=IfCondition(use_gpu),
+    )
+    set_libgl_software = SetEnvironmentVariable(
+        name='LIBGL_ALWAYS_SOFTWARE', value='1',
+        condition=UnlessCondition(use_gpu),
+    )
+    set_ogre_rtt = SetEnvironmentVariable(
+        name='OGRE_RTT_MODE', value='Copy',
+        condition=UnlessCondition(use_gpu),
+    )
+
     # Gz-sim: server + GUI with OGRE1 renderer (WSL2 compatible).
-    # Removing -s runs server+GUI together. render_engine ogre avoids OGRE2 crash on WSL2.
+    # render_engine ogre = OGRE1; avoids OGRE2 crash on WSL2.
     gz_sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg_ros_gz_sim, 'launch', 'gz_sim.launch.py')
@@ -96,6 +124,18 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='true'),
         DeclareLaunchArgument('world', default_value=''),
+        DeclareLaunchArgument(
+            'use_gpu',
+            default_value='false',
+            description=(
+                'Rendering backend: '
+                'true = Mesa D3D12 GPU (WSL2 + NVIDIA, needs d3d12_dri.so + /usr/lib/wsl/lib/libd3d12.so); '
+                'false = LLVMpipe software renderer (default, works on any machine)'
+            ),
+        ),
+        set_mesa_d3d12,
+        set_libgl_software,
+        set_ogre_rtt,
         gz_sim,
         robot_state_publisher,
         rviz,
