@@ -47,7 +47,7 @@ class GraspExecutorNode(Node):
         self.declare_parameter('compute_grasp_service', '/icgnet/compute_grasps')
         self.declare_parameter('default_min_score', 0.5)
         self.declare_parameter('default_max_attempts', 5)
-        self.declare_parameter('approach_offset', 0.10)
+        self.declare_parameter('approach_offset', 0.12)
         self.declare_parameter('grasp_forward_offset', 0.045)
         self.declare_parameter('approach_velocity', 0.08)
         self.declare_parameter('approach_acceleration', 0.08)
@@ -98,11 +98,11 @@ class GraspExecutorNode(Node):
 
         # ── Pick-and-place ────────────────────────────────────────────────────
         self.declare_parameter('place_x', 0.45)
-        self.declare_parameter('place_y', -0.30)
-        self.declare_parameter('place_release_z', 0.24)
-        self.declare_parameter('place_pre_offset', 0.12)
-        self.declare_parameter('bin_footprint', 0.18)
-        self.declare_parameter('bin_rim_height', 0.08)
+        self.declare_parameter('place_y', -0.50)
+        self.declare_parameter('place_release_z', 0.26)
+        self.declare_parameter('place_pre_offset', 0.15)
+        self.declare_parameter('bin_footprint', 0.30)
+        self.declare_parameter('bin_rim_height', 0.10)
         self.declare_parameter('transport_velocity', 0.10)
         self.declare_parameter('transport_acceleration', 0.10)
         self.declare_parameter('transport_clear_z', 0.45)
@@ -123,7 +123,7 @@ class GraspExecutorNode(Node):
         self.declare_parameter('allowed_planning_time', 5.0)
         self.declare_parameter('num_planning_attempts', 10)
         self.declare_parameter('inference_timeout', 120.0)
-        self.declare_parameter('max_approach_angle_deg', 90.0)
+        self.declare_parameter('max_approach_angle_deg', 45.0)
         self.declare_parameter('min_approach_angle_deg', 0.0)
 
         self._use_collision_scene = self.get_parameter('use_collision_scene').get_parameter_value().bool_value
@@ -850,15 +850,21 @@ class GraspExecutorNode(Node):
         )
 
     def _place_object(self, quat_xyzw: list, target_co_id: str, skip_place: bool) -> bool:
-        """Steps 5–7 + HOME: three-phase transport → lower → release → retract → HOME.
+        """Steps 5–7 + retract + HOME: transport → lower → release → retract → HOME.
 
-        Transport strategy (three phases):
-          A. Cartesian lift-clear: straight up to transport_clear_z — short, high fraction.
-          B. Joint-space transfer: OMPL to place_pre_pos with grasp orientation as IK target.
-             OMPL plans freely over the long arc; no orientation-seed IK → no "joint limits" fail.
-          C. Cartesian lower: straight down to place_release_z, orientation locked.
+        Called after Step 4 (Cartesian lift) with the object held. Three-phase deposit:
+          Step 5/7: Joint-space transfer → (place_x, place_y, transport_clear_z).
+                    OMPL plans freely over the long lateral arc; orientation is an IK goal on
+                    the target, not a path constraint → pick_ik finds a valid seed without
+                    hitting joint limits. Runs at transport_velocity/acceleration.
+          Step 6/7: Cartesian lower → (place_x, place_y, place_release_z).
+                    Short straight descent above the bin, orientation locked.
+          Step 7/7: Open gripper + settle release_settle_states fresh joint_states (sim-time
+                    settle, RTF-independent) → object falls free into bin.
+          RETRACT:  Cartesian +Z to place_release_z + safe_retract_height (gripper empty).
+          HOME:     Joint-space to HOME_JOINT_POSITIONS at arm_default_velocity.
 
-        The arm only reorients its wrist AFTER release (HOME joint-space, gripper empty).
+        Physical success verified via _object_in_bin() (object pose from /model_poses).
         """
         if skip_place:
             # Debug path: old behaviour — go HOME while holding the object.
