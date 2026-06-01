@@ -128,6 +128,12 @@ ros2 launch icgnet_main icgnet_inference.launch.py
 
 > Prerequisite: generate `~/icgnet_inference_data/` first on a GPU machine (see Save Inference section).
 
+> **Object spawn coordinates for replay**: the bundled inference data was saved with the object at
+> `x=0.65, y=0.0, z=0.05`. The object **must** be spawned at exactly those coordinates in T2,
+> otherwise the saved grasp poses will not match the object's actual position. Between failed
+> attempts the grasp executor teleports the object back to these coordinates automatically
+> (configured via `object_init_x/y/z` in `grasp_executor_params.yaml`).
+
 ```bash
 cd ~/instance-centric-grasping
 source /opt/ros/humble/setup.bash && source install/setup.bash

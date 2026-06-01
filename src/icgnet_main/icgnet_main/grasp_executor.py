@@ -199,7 +199,7 @@ class GraspExecutorNode(Node):
         with self._grasps_lock:
             self._latest_grasps = msg
 
-    def _reset_scene(self):
+    def _reset_scene(self, teleport_object: bool = True):
         # Remove active CO from the planning scene BEFORE any motion planning.
         # After a failed attempt the arm may be inside or adjacent to the CO volume,
         # making the current state appear in collision → INVALID_MOTION_PLAN on every
@@ -226,26 +226,30 @@ class GraspExecutorNode(Node):
         else:
             self.get_logger().warn('[RESET] Arm home move failed (continuing anyway).')
 
-        if self._set_entity_client.wait_for_service(timeout_sec=2.0):
-            req = SetEntityPose.Request()
-            req.entity.name = self._object_entity_name
-            req.entity.type = Entity.MODEL
-            req.pose.position.x = self._object_init_x
-            req.pose.position.y = self._object_init_y
-            req.pose.position.z = self._object_init_z
-            req.pose.orientation.w = 1.0
-            fut = self._set_entity_client.call_async(req)
-            if not self._wait_for_future(fut):
-                self.get_logger().warn('[RESET] Object reset timed out.')
-            elif fut.result().success:
-                self.get_logger().info(
-                    f'[RESET] Object "{self._object_entity_name}" reset to '
-                    f'[{self._object_init_x}, {self._object_init_y}, {self._object_init_z}]'
-                )
+        # Teleport only between retry attempts. Before attempt 1 the object is already
+        # at the position seen by inference — teleporting would move it away from the
+        # predicted grasp poses and cause misses.
+        if teleport_object:
+            if self._set_entity_client.wait_for_service(timeout_sec=2.0):
+                req = SetEntityPose.Request()
+                req.entity.name = self._object_entity_name
+                req.entity.type = Entity.MODEL
+                req.pose.position.x = self._object_init_x
+                req.pose.position.y = self._object_init_y
+                req.pose.position.z = self._object_init_z
+                req.pose.orientation.w = 1.0
+                fut = self._set_entity_client.call_async(req)
+                if not self._wait_for_future(fut):
+                    self.get_logger().warn('[RESET] Object reset timed out.')
+                elif fut.result().success:
+                    self.get_logger().info(
+                        f'[RESET] Object "{self._object_entity_name}" reset to '
+                        f'[{self._object_init_x}, {self._object_init_y}, {self._object_init_z}]'
+                    )
+                else:
+                    self.get_logger().warn('[RESET] Object reset service returned failure.')
             else:
-                self.get_logger().warn('[RESET] Object reset service returned failure.')
-        else:
-            self.get_logger().warn('[RESET] /world/icgnet_world/set_pose not available — object not reset.')
+                self.get_logger().warn('[RESET] /world/icgnet_world/set_pose not available — object not reset.')
 
         # Re-add CO so the next attempt's Step-1 planning can avoid the object.
         if self._use_collision_scene and self._active_co is not None:
@@ -316,8 +320,8 @@ class GraspExecutorNode(Node):
                 f"angle_from_vertical={angle_from_vertical:.1f}° width={g.width:.3f}"
             )
 
-        self.get_logger().info('[RESET] Resetting scene before first attempt...')
-        self._reset_scene()
+        self.get_logger().info('[RESET] Resetting arm/gripper before first attempt (object stays at inference position)...')
+        self._reset_scene(teleport_object=False)
 
         for i, g in enumerate(candidates):
             p = g.pose.position
