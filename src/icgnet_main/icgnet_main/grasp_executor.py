@@ -9,10 +9,9 @@ from shape_msgs.msg import SolidPrimitive
 from ros_gz_interfaces.msg import Entity
 from ros_gz_interfaces.srv import SetEntityPose
 from moveit_msgs.msg import (
-    AllowedCollisionEntry, AllowedCollisionMatrix, CollisionObject,
-    PlanningScene, PlanningSceneComponents,
+    CollisionObject, PlanningScene, PlanningSceneComponents,
 )
-from moveit_msgs.srv import ApplyPlanningScene, GetPlanningScene
+from moveit_msgs.srv import GetPlanningScene
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
@@ -200,16 +199,11 @@ class GraspExecutorNode(Node):
             SetEntityPose, '/world/icgnet_world/set_pose', callback_group=cb_svc
         )
 
-        self._apply_scene_client = self.create_client(
-            ApplyPlanningScene, '/apply_planning_scene', callback_group=cb_svc
-        )
         self._get_scene_client = self.create_client(
             GetPlanningScene, '/get_planning_scene', callback_group=cb_svc
         )
 
         self._co_pub = self.create_publisher(CollisionObject, '/collision_object', 10)
-
-        self._saved_acm: AllowedCollisionMatrix | None = None
 
         # Tracks the CO that is currently being managed so _reset_scene() can
         # remove it before planning (arm may be inside the CO after a failed attempt).
@@ -512,69 +506,6 @@ class GraspExecutorNode(Node):
             time.sleep(0.02)
         return True
 
-    def _get_current_acm(self) -> AllowedCollisionMatrix | None:
-        if not self._get_scene_client.wait_for_service(timeout_sec=2.0):
-            self.get_logger().warn("GetPlanningScene not available.")
-            return None
-        req = GetPlanningScene.Request()
-        req.components.components = PlanningSceneComponents.ALLOWED_COLLISION_MATRIX
-        fut = self._get_scene_client.call_async(req)
-        if not self._wait_for_future(fut):
-            self.get_logger().warn("GetPlanningScene timed out.")
-            return None
-        return fut.result().scene.allowed_collision_matrix
-
-    def _apply_acm(self, acm: AllowedCollisionMatrix):
-        if not self._apply_scene_client.wait_for_service(timeout_sec=2.0):
-            self.get_logger().warn("ApplyPlanningScene not available.")
-            return
-        diff = PlanningScene(is_diff=True)
-        diff.allowed_collision_matrix = acm
-        fut = self._apply_scene_client.call_async(ApplyPlanningScene.Request(scene=diff))
-        if not self._wait_for_future(fut):
-            self.get_logger().warn("ApplyPlanningScene timed out.")
-
-    def _set_acm_permissive(self, target_co_id: str):
-        """Allow finger links to contact the target collision object during approach."""
-        if not self._use_collision_scene:
-            return
-
-        acm = self._get_current_acm()
-        if acm is None:
-            return
-        self._saved_acm = acm
-
-        names = list(acm.entry_names)
-        values = [list(ev.enabled) for ev in acm.entry_values]
-
-        for link in list(self._acm_allowed_links) + [target_co_id]:
-            if link not in names:
-                for row in values:
-                    row.append(False)
-                names.append(link)
-                values.append([False] * len(names))
-
-        for link in self._acm_allowed_links:
-            i, j = names.index(link), names.index(target_co_id)
-            values[i][j] = True
-            values[j][i] = True
-
-        new_acm = AllowedCollisionMatrix()
-        new_acm.entry_names = names
-        for row in values:
-            entry = AllowedCollisionEntry()
-            entry.enabled = row
-            new_acm.entry_values.append(entry)
-
-        self._apply_acm(new_acm)
-
-    def _restore_acm(self, target_co_id: str):
-        """Restore ACM to state before _set_acm_permissive."""
-        if not self._use_collision_scene or self._saved_acm is None:
-            return
-        self._apply_acm(self._saved_acm)
-        self._saved_acm = None
-
     def _fetch_co_from_scene(self, co_id: str):
         req = GetPlanningScene.Request()
         req.components.components = PlanningSceneComponents.WORLD_OBJECT_GEOMETRY
@@ -607,7 +538,6 @@ class GraspExecutorNode(Node):
     def _abort_grasp(self, target_co_id: str) -> bool:
         self._arm.max_velocity = self._arm_default_velocity
         self._arm.max_acceleration = self._arm_default_acceleration
-        self._restore_acm(target_co_id)
         return False
 
     def _execute_single_grasp(self, g, skip_place: bool = False) -> bool:
@@ -663,9 +593,6 @@ class GraspExecutorNode(Node):
         self._gripper.wait_until_executed()
 
         # ── Step 0: update collision scene ───────────────────────────────────
-        # ACM is set permissive only AFTER pre-grasp, so joint-space planning
-        # in Step 1 still treats the target CO as an obstacle and finds a valid
-        # approach configuration from outside the object volume.
         if self._use_collision_scene:
             self._arm.update_planning_scene()
 
@@ -685,7 +612,6 @@ class GraspExecutorNode(Node):
         self.get_logger().info(f"[STEP 1/5] Pre-grasp reached in {dt:.2f}s")
         time.sleep(self._pregrasp_settle_time)
 
-        # Switch to approach velocity for Cartesian move.
         self._arm.max_velocity = self._approach_velocity
         self._arm.max_acceleration = self._approach_acceleration
 
@@ -704,7 +630,6 @@ class GraspExecutorNode(Node):
         # contact_pos = pos + grasp_forward_offset * approach
         # where pos is ICGNet TCP (0.045 m behind contact along approach),
         # so contact_pos = exactly the predicted contact point on the object surface.
-        # Single slow Cartesian move: pre_pos → contact_pos.
         self.get_logger().info(
             f"[STEP 2/5] CARTESIAN APPROACH → [{contact_pos[0]:.3f}, {contact_pos[1]:.3f}, {contact_pos[2]:.3f}]"
             f"  (vel={self._approach_velocity})"
@@ -734,7 +659,6 @@ class GraspExecutorNode(Node):
         # would read a state from before the gripper command settled.
         finger_gap = self._read_finger_gap_fresh(self._joint_state_fresh_timeout)
 
-        # Detect grasp: if fingers are fully closed the object was missed.
         # OPEN=0.04m, CLOSED=0.0m per finger; threshold 5mm means jaw gap > 10mm total.
         if finger_gap < self._min_finger_gap:
             self.get_logger().warn(
@@ -914,32 +838,10 @@ class GraspExecutorNode(Node):
                     self._arm.remove_collision_object(id=target_co_id)
                 except Exception as e:
                     self.get_logger().warn(f"[SKIP_PLACE] Detach failed (non-fatal): {e}")
-                self._restore_acm(target_co_id)
             self._active_co_id = None
             self._active_co = None
             return True
 
-        # Pre-compute waypoints. All z values are TCP-in-world.
-        # clear_pos shares x/y with the current grasp so Phase A is a pure vertical move.
-        js_now = self._arm.joint_state
-        current_tcp = None
-        if js_now is not None:
-            # Approximate current TCP position from grasp plan data passed in via the closure
-            # (we don't have FK here). Use contact_pos x/y + clear_z as safe approximation.
-            pass  # current_tcp unused; clear_pos computed from lift_pos below
-
-        # Phase A target: directly above the current grasp position (lift_pos x/y), at clear_z.
-        # This is reached from lift_pos via a very short Cartesian move.
-        # We read the approximate x/y from the grasp quat (not needed); the Cartesian
-        # planner will start from the current EE position automatically.
-        # clear_pos x/y are set to place_x/y so Phase B is a pure horizontal+descent.
-        # Instead use the approach: clear at place_x/y works if the arm can go there;
-        # but the cleanest is: first go straight UP from wherever we are, then across.
-        # We achieve "straight up" by calling Cartesian with only z changed.
-        # Since we don't have current EE pos here, we pass the target with the
-        # SAME quat; pymoveit2 Cartesian will compute the path from the current config.
-        # transport_clear_z is the target for the joint-space transfer.
-        # It sits above the bin rim (0.10m) with enough vertical clearance to then Cartesian-lower.
         transfer_pos = [self._place_x, self._place_y, self._transport_clear_z]
         place_release_pos = [self._place_x, self._place_y, self._place_release_z]
         retract_pos = [self._place_x, self._place_y,
@@ -1031,8 +933,7 @@ class GraspExecutorNode(Node):
 
         _co_detach_remove()
         if self._use_collision_scene:
-            self._restore_acm(target_co_id)
-            self.get_logger().info(f"[STEP 7/7] Detached '{target_co_id}', ACM restored")
+            self.get_logger().info(f"[STEP 7/7] Detached '{target_co_id}'")
 
         self._active_co_id = None
         self._active_co = None

@@ -126,9 +126,6 @@ class ICGNetGraspNode(Node):
         self.declare_parameter('collision_object_topic', '/collision_object')
         self.declare_parameter('collision_id_prefix', 'icgnet_inst_')
         self.declare_parameter('return_meshes', True)
-        # TABLE DISABLED — objects rest on the ground (z≈0)
-        # self.declare_parameter('table_z_top', 0.05)
-        # self.declare_parameter('table_z_margin', 0.005)
         self.declare_parameter('pc_nb_neighbors', 20)
         self.declare_parameter('pc_std_ratio', 2.0)
         self.declare_parameter('pc_normal_radius_factor', 5.0)
@@ -345,16 +342,6 @@ class ICGNetGraspNode(Node):
 
         points_world = (rot_mat @ raw_points.T).T + translation
         camera_pos_world = translation
-
-        # TABLE DISABLED — table z-filter removed; objects rest on the ground
-        # table_z_top = self.get_parameter('table_z_top').get_parameter_value().double_value
-        # table_z_margin = self.get_parameter('table_z_margin').get_parameter_value().double_value
-        # z_cutoff = table_z_top + table_z_margin
-        # above_table = points_world[:, 2] > z_cutoff
-        # n_removed = int((~above_table).sum())
-        # points_world = points_world[above_table]
-        # if n_removed > 0:
-        #     self.get_logger().info(f"Table filter: removed {n_removed} pts at z≤{z_cutoff:.3f}m")
 
         pts, normals = process_point_cloud(
             points_world,

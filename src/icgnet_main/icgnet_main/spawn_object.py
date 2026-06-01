@@ -46,8 +46,6 @@ class ObjectSpawner(Node):
         self.declare_parameter('target_type', '')
         self.declare_parameter('target_class', 'can')
         self.declare_parameter('num_objects', 1)
-        # TABLE DISABLED — objects spawn directly on the ground (z≈0)
-        # self.declare_parameter('table_z_top', 0.05)
         self.declare_parameter('spawn_x_min', 0.40)
         self.declare_parameter('spawn_x_max', 0.80)
         self.declare_parameter('spawn_y_min', -0.30)
@@ -59,7 +57,6 @@ class ObjectSpawner(Node):
         self.target_type = self.get_parameter('target_type').get_parameter_value().string_value.strip()
         self.target_class = self.get_parameter('target_class').get_parameter_value().string_value.strip()
         self.num_objects = self.get_parameter('num_objects').get_parameter_value().integer_value
-        # self.table_z_top = self.get_parameter('table_z_top').get_parameter_value().double_value
         self._spawn_x_min = self.get_parameter('spawn_x_min').get_parameter_value().double_value
         self._spawn_x_max = self.get_parameter('spawn_x_max').get_parameter_value().double_value
         self._spawn_y_min = self.get_parameter('spawn_y_min').get_parameter_value().double_value
@@ -142,7 +139,6 @@ class ObjectSpawner(Node):
 
         sdf_path = matches[0] if matches else None
         half_h = _half_height_from_sdf(sdf_path) if sdf_path else 0.05
-        # TABLE DISABLED: spawn_z = self.table_z_top + half_h + 0.002
         spawn_z = half_h + 0.002
 
         cmd = [
