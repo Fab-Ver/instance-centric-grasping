@@ -105,11 +105,71 @@
             </clip>
           </camera>
           <always_on>1</always_on>
-          <update_rate>30</update_rate>
+          <!-- 5 Hz is sufficient: ICGNet inference is on-demand (uses last frame on /trigger).
+               30 Hz in software rendering (WSL2) was killing RTF → arm moves appeared frozen. -->
+          <update_rate>1</update_rate>
           <visualize>false</visualize>
           <!-- Topic base: publishes to /camera/rgbd_camera/{image,depth_image,points,camera_info} -->
           <topic>/camera/rgbd_camera</topic>
         </sensor>
+      </link>
+    </model>
+
+    <!-- Drop bin: open-top box.
+         Pose (0.45, -0.50): outside camera FOV (cam covers y ∈ [-0.35,0.35]) → no cloud pollution.
+         Outer footprint 0.30×0.30m, walls h=0.10m, thickness=0.02m → inner opening ~0.26m. -->
+    <model name="drop_bin">
+      <static>true</static>
+      <pose>0.45 -0.50 0 0 0 0</pose>
+
+      <!-- Floor -->
+      <link name="floor">
+        <collision name="col"><geometry><box><size>0.30 0.30 0.005</size></box></geometry></collision>
+        <visual name="vis">
+          <pose>0 0 0.0025 0 0 0</pose>
+          <geometry><box><size>0.30 0.30 0.005</size></box></geometry>
+          <material><ambient>0.9 0.5 0.0 1</ambient><diffuse>0.9 0.5 0.0 1</diffuse></material>
+        </visual>
+      </link>
+
+      <!-- Wall +X (half = 0.15) -->
+      <link name="wall_px">
+        <pose>0.14 0 0.05 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.02 0.30 0.10</size></box></geometry></collision>
+        <visual name="vis">
+          <geometry><box><size>0.02 0.30 0.10</size></box></geometry>
+          <material><ambient>0.9 0.5 0.0 1</ambient><diffuse>0.9 0.5 0.0 1</diffuse></material>
+        </visual>
+      </link>
+
+      <!-- Wall -X -->
+      <link name="wall_nx">
+        <pose>-0.14 0 0.05 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.02 0.30 0.10</size></box></geometry></collision>
+        <visual name="vis">
+          <geometry><box><size>0.02 0.30 0.10</size></box></geometry>
+          <material><ambient>0.9 0.5 0.0 1</ambient><diffuse>0.9 0.5 0.0 1</diffuse></material>
+        </visual>
+      </link>
+
+      <!-- Wall +Y -->
+      <link name="wall_py">
+        <pose>0 0.14 0.05 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.26 0.02 0.10</size></box></geometry></collision>
+        <visual name="vis">
+          <geometry><box><size>0.26 0.02 0.10</size></box></geometry>
+          <material><ambient>0.9 0.5 0.0 1</ambient><diffuse>0.9 0.5 0.0 1</diffuse></material>
+        </visual>
+      </link>
+
+      <!-- Wall -Y -->
+      <link name="wall_ny">
+        <pose>0 -0.14 0.05 0 0 0</pose>
+        <collision name="col"><geometry><box><size>0.26 0.02 0.10</size></box></geometry></collision>
+        <visual name="vis">
+          <geometry><box><size>0.26 0.02 0.10</size></box></geometry>
+          <material><ambient>0.9 0.5 0.0 1</ambient><diffuse>0.9 0.5 0.0 1</diffuse></material>
+        </visual>
       </link>
     </model>
 

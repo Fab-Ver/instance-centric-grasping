@@ -29,9 +29,6 @@ grasp_executor_node:
     # Master switch. Set false to disable all collision-scene logic (debug only).
     use_collision_scene: true
 
-    # Weight (kg) assigned to the attached object after grasping.
-    attach_weight: 0.2
-
     # Finger links allowed to contact the target during approach and grasp.
     acm_allowed_links:
       - panda_leftfinger
@@ -47,10 +44,6 @@ grasp_executor_node:
 
     # Hardware per-finger position limit; caps the pre-grasp opening (m).
     max_finger_pos: 0.04
-
-    # Seconds to wait after close command before reading the finger gap.
-    # Effort-controlled gripper needs ~0.5s to reach force steady-state against the object.
-    gripper_read_settle: 0.5
 
     # If the finger gap is below this value the gripper is fully closed → missed grasp (m).
     min_finger_gap: 0.005
@@ -86,3 +79,44 @@ grasp_executor_node:
     # Max seconds to wait for /icgnet/compute_grasps to return.
     # ICGNet with return_meshes=True (marching cubes) on a small GPU takes 20–60 s.
     inference_timeout: 120.0
+
+    # ── Pick-and-place (Fase 5) ──────────────────────────────────────────────
+    # Drop bin centre in world frame (must match drop_bin pose in icgnet_world.sdf).
+    # y=-0.50: outside camera FOV (camera covers y ∈ [-0.35,0.35]) → no cloud pollution.
+    place_x: 0.45
+    place_y: -0.50
+
+    # z of TCP at release — must clear the bin rim (bin_rim_height=0.10).
+    # 0.26m leaves 16cm above the rim; works for can/box without object-specific tuning.
+    place_release_z: 0.26
+
+    # Cartesian descent from place_pre to place_release (m above place_release_z).
+    place_pre_offset: 0.15
+
+    # Bin geometry for MoveIt collision object (solid box up to the rim).
+    bin_footprint: 0.30    # outer side length (m) — matches drop_bin in world.sdf
+    bin_rim_height: 0.10   # wall height = top of MoveIt CO (m)
+
+    # z reached by Cartesian lift-clear before the long joint-space transfer.
+    # Must be comfortably above all obstacles on the path. 0.45m clears the table area.
+    transport_clear_z: 0.45
+
+    # Slow velocity for transport and lower phases.
+    transport_velocity: 0.10
+    transport_acceleration: 0.10
+
+    # Cartesian retract height after release before returning HOME (m).
+    safe_retract_height: 0.15
+
+    # Weight (kg) of objects attached in MoveIt planning scene.
+    attach_weight: 0.35
+
+    # Max wall-clock seconds to wait for a fresh joint_state before gap reads.
+    # At RTF≈0.03 with joint_states at 50Hz sim, one message arrives every ~0.67s wall.
+    # 2.0s provides 3× margin.
+    joint_state_fresh_timeout: 2.0
+
+    # Number of fresh joint_state messages to accumulate after gripper open (Step 7)
+    # before starting the retract move. Gives the object sim-time to fall free.
+    # 20 states ≈ 0.4s sim at 50Hz; at RTF 0.03 = ~13s wall (acceptable for pick-and-place).
+    release_settle_states: 20

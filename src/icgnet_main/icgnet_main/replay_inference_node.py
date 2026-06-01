@@ -28,6 +28,7 @@ class ReplayInferenceNode(Node):
         self._grasps: GraspArray | None = None
         self._collision_objects: list[CollisionObject] = []
         self._meta: dict = {}
+        self._has_spawned = False
         self._load_data()
 
         cb = ReentrantCallbackGroup()
@@ -72,8 +73,9 @@ class ReplayInferenceNode(Node):
             response.message = 'No inference data loaded.'
             return response
 
-        if self._spawn_object_flag:
+        if self._spawn_object_flag and not self._has_spawned:
             self._spawn_object()
+            self._has_spawned = True
 
         for co in self._collision_objects:
             self._co_pub.publish(co)

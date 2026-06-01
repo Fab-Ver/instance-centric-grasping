@@ -4,7 +4,8 @@ from threading import Lock, Thread
 import numpy as np
 import rclpy
 import rclpy.duration
-from geometry_msgs.msg import Point
+from geometry_msgs.msg import Point, Pose
+from shape_msgs.msg import SolidPrimitive
 from ros_gz_interfaces.msg import Entity
 from ros_gz_interfaces.srv import SetEntityPose
 from moveit_msgs.msg import (
@@ -93,13 +94,26 @@ class GraspExecutorNode(Node):
         }
 
         self.declare_parameter('use_collision_scene', True)
-        self.declare_parameter('attach_weight', 0.2)
+        self.declare_parameter('attach_weight', 0.35)
+
+        # ── Pick-and-place ────────────────────────────────────────────────────
+        self.declare_parameter('place_x', 0.45)
+        self.declare_parameter('place_y', -0.30)
+        self.declare_parameter('place_release_z', 0.24)
+        self.declare_parameter('place_pre_offset', 0.12)
+        self.declare_parameter('bin_footprint', 0.18)
+        self.declare_parameter('bin_rim_height', 0.08)
+        self.declare_parameter('transport_velocity', 0.10)
+        self.declare_parameter('transport_acceleration', 0.10)
+        self.declare_parameter('transport_clear_z', 0.45)
+        self.declare_parameter('safe_retract_height', 0.15)
+        self.declare_parameter('joint_state_fresh_timeout', 2.0)
         self.declare_parameter('acm_allowed_links',
                                ['panda_leftfinger', 'panda_rightfinger', 'panda_hand'])
         self.declare_parameter('collision_id_prefix', 'icgnet_inst_')
         self.declare_parameter('finger_safety_margin', 0.01)
         self.declare_parameter('max_finger_pos', 0.04)
-        self.declare_parameter('gripper_read_settle', 0.3)
+        self.declare_parameter('release_settle_states', 20)
         self.declare_parameter('min_finger_gap', 0.005)
         self.declare_parameter('max_finger_gap', 0.036)
         self.declare_parameter('executor_threads', 4)
@@ -114,11 +128,22 @@ class GraspExecutorNode(Node):
 
         self._use_collision_scene = self.get_parameter('use_collision_scene').get_parameter_value().bool_value
         self._attach_weight = self.get_parameter('attach_weight').get_parameter_value().double_value
+        self._place_x = self.get_parameter('place_x').get_parameter_value().double_value
+        self._place_y = self.get_parameter('place_y').get_parameter_value().double_value
+        self._place_release_z = self.get_parameter('place_release_z').get_parameter_value().double_value
+        self._place_pre_offset = self.get_parameter('place_pre_offset').get_parameter_value().double_value
+        self._bin_footprint = self.get_parameter('bin_footprint').get_parameter_value().double_value
+        self._bin_rim_height = self.get_parameter('bin_rim_height').get_parameter_value().double_value
+        self._transport_velocity = self.get_parameter('transport_velocity').get_parameter_value().double_value
+        self._transport_acceleration = self.get_parameter('transport_acceleration').get_parameter_value().double_value
+        self._transport_clear_z = self.get_parameter('transport_clear_z').get_parameter_value().double_value
+        self._safe_retract_height = self.get_parameter('safe_retract_height').get_parameter_value().double_value
+        self._joint_state_fresh_timeout = self.get_parameter('joint_state_fresh_timeout').get_parameter_value().double_value
         self._acm_allowed_links = self.get_parameter('acm_allowed_links').get_parameter_value().string_array_value
         self._collision_id_prefix = self.get_parameter('collision_id_prefix').get_parameter_value().string_value
         self._finger_safety_margin = self.get_parameter('finger_safety_margin').get_parameter_value().double_value
         self._max_finger_pos = self.get_parameter('max_finger_pos').get_parameter_value().double_value
-        self._gripper_read_settle = self.get_parameter('gripper_read_settle').get_parameter_value().double_value
+        self._release_settle_states = self.get_parameter('release_settle_states').get_parameter_value().integer_value
         self._min_finger_gap = self.get_parameter('min_finger_gap').get_parameter_value().double_value
         self._max_finger_gap = self.get_parameter('max_finger_gap').get_parameter_value().double_value
         self._max_grasp_width = self.get_parameter('max_grasp_width').get_parameter_value().double_value
@@ -193,6 +218,9 @@ class GraspExecutorNode(Node):
 
         self.create_service(ExecuteGrasp, '/icgnet/execute_grasp', self._execute_grasp_cb, callback_group=cb_grasp_exec)
 
+        # Published lazily on the first execute_grasp call, when move_group is ready.
+        self._bin_co_published = False
+
         self.get_logger().info('GraspExecutorNode ready.')
 
     def _grasps_cb(self, msg: GraspArray):
@@ -260,10 +288,17 @@ class GraspExecutorNode(Node):
         target = req.target.strip() if req.target else 'any'
         min_score = req.min_score if req.min_score > 0.0 else self._default_min_score
         max_attempts = req.max_attempts if req.max_attempts > 0 else self._default_max_attempts
+        skip_place = req.skip_place
 
         self.get_logger().info(
-            f"ExecuteGrasp: target='{target}' min_score={min_score:.2f} max_attempts={max_attempts}"
+            f"ExecuteGrasp: target='{target}' min_score={min_score:.2f} max_attempts={max_attempts} "
+            f"skip_place={skip_place}"
         )
+
+        # Ensure the drop-bin collision object is in the planning scene.
+        if not self._bin_co_published:
+            self._add_bin_collision_object()
+            self._bin_co_published = True
 
         # Clear stale grasps so we know the next GraspArray is fresh
         with self._grasps_lock:
@@ -331,7 +366,7 @@ class GraspExecutorNode(Node):
                 f"inst={g.instance_id} cls={g.semantic_class}({CLASS_NAMES.get(g.semantic_class,'?')}) "
                 f"pos=[{p.x:.3f},{p.y:.3f},{p.z:.3f}]"
             )
-            if self._execute_single_grasp(g):
+            if self._execute_single_grasp(g, skip_place=skip_place):
                 self._clear_current_grasp_marker()
                 res.success = True
                 res.grasps_attempted = i + 1
@@ -575,7 +610,7 @@ class GraspExecutorNode(Node):
         self._restore_acm(target_co_id)
         return False
 
-    def _execute_single_grasp(self, g) -> bool:
+    def _execute_single_grasp(self, g, skip_place: bool = False) -> bool:
         # Guarantee default velocity at every attempt start, regardless of prior state.
         self._arm.max_velocity = self._arm_default_velocity
         self._arm.max_acceleration = self._arm_default_acceleration
@@ -694,18 +729,13 @@ class GraspExecutorNode(Node):
         self.get_logger().info("[STEP 3/5] CLOSING GRIPPER")
         self._gripper.close()
         self._gripper.wait_until_executed()
-        time.sleep(self._gripper_read_settle)  # let the controller settle before reading finger positions
+        # Demand a fresh joint_state: wall-clock sleep is meaningless at low RTF (e.g. 0.03).
+        # At RTF 0.03 the broadcaster runs at 50 Hz sim ≈ 1.5 msg/s wall; 0.5s sleep
+        # would read a state from before the gripper command settled.
+        finger_gap = self._read_finger_gap_fresh(self._joint_state_fresh_timeout)
 
         # Detect grasp: if fingers are fully closed the object was missed.
         # OPEN=0.04m, CLOSED=0.0m per finger; threshold 5mm means jaw gap > 10mm total.
-        js = self._arm.joint_state
-        finger_gap = 0.0
-        if js is not None:
-            for fname in robot.gripper_joint_names():
-                try:
-                    finger_gap = max(finger_gap, js.position[js.name.index(fname)])
-                except ValueError:
-                    pass
         if finger_gap < self._min_finger_gap:
             self.get_logger().warn(
                 f"[STEP 3/5] Gripper fully closed (gap={finger_gap*1000:.1f}mm < "
@@ -766,19 +796,14 @@ class GraspExecutorNode(Node):
             return self._abort_grasp(target_co_id)
         self.get_logger().info(f"[STEP 4/5] Object lifted in {dt:.2f}s")
 
-        # Verify the object is still gripped after lift (drop detection).
-        js_post = self._arm.joint_state
-        finger_gap_post = 0.0
-        if js_post is not None:
-            for fname in robot.gripper_joint_names():
-                try:
-                    finger_gap_post = max(finger_gap_post, js_post.position[js_post.name.index(fname)])
-                except ValueError:
-                    pass
-        if finger_gap_post < self._min_finger_gap or finger_gap_post > self._max_finger_gap:
+        # Verify object is still gripped after lift (drop detection).
+        # Only lower bound: gap→0 means fingers collapsed on empty air = object dropped.
+        # Upper bound removed: valid grasp gap varies by object and oscillates slightly.
+        finger_gap_post = self._read_finger_gap_fresh(self._joint_state_fresh_timeout)
+        if finger_gap_post < self._min_finger_gap:
             self.get_logger().warn(
-                f"[STEP 4/5 POST-CHECK] Object lost during lift "
-                f"(gap={finger_gap_post*1000:.1f}mm, expected [{self._min_finger_gap*1000:.0f}–{self._max_finger_gap*1000:.0f}mm]) — reporting failure"
+                f"[STEP 4/5 POST-CHECK] Object dropped during lift "
+                f"(gap={finger_gap_post*1000:.1f}mm < {self._min_finger_gap*1000:.0f}mm)"
             )
             if self._use_collision_scene:
                 try:
@@ -788,36 +813,255 @@ class GraspExecutorNode(Node):
                     self.get_logger().warn(f"[STEP 4 drop] Detach failed: {e}")
             return self._abort_grasp(target_co_id)
 
-        # ── Step 5/5: return to home (object secured, arm in safe config) ─────
-        self._arm.max_velocity = self._arm_default_velocity
-        self._arm.max_acceleration = self._arm_default_acceleration
-        self.get_logger().info("[STEP 5/5] MOVING TO HOME")
-        t0 = time.time()
-        self._arm.move_to_configuration(
-            joint_positions=HOME_JOINT_POSITIONS,
-            joint_names=robot.joint_names(),
-        )
-        ok_home = self._arm.wait_until_executed()
-        dt = time.time() - t0
-        if ok_home:
-            self.get_logger().info(f"[STEP 5/5] Home reached in {dt:.2f}s")
-        else:
-            self.get_logger().warn(f"[STEP 5/5] Home failed in {dt:.2f}s (lift still succeeded)")
+        # ── Steps 5–7 + HOME: transport → lower → release → retract → HOME ─────
+        return self._place_object(quat_xyzw, target_co_id, skip_place)
 
-        # ── Step 6: detach, remove collision object, restore ACM ──────────────
+
+    def _read_finger_gap(self) -> float:
+        """Return the maximum finger joint position as a proxy for gripper opening."""
+        js = self._arm.joint_state
+        gap = 0.0
+        if js is not None:
+            for fname in robot.gripper_joint_names():
+                try:
+                    gap = max(gap, js.position[js.name.index(fname)])
+                except ValueError:
+                    pass
+        return gap
+
+    def _read_finger_gap_fresh(self, timeout: float = 2.0) -> float:
+        """Wait for a fresh joint_state, then return the finger gap.
+
+        Wall-clock sleeps are unreliable at low RTF: at RTF 0.03 the joint_state
+        broadcaster runs at 50 Hz sim ≈ 1.5 msg/s wall, so a 0.5 s sleep may read
+        a stale value from before the last gripper command.  This helper resets the
+        pymoveit2 freshness flag and waits up to `timeout` seconds for a new message.
+        """
+        self._arm.reset_new_joint_state_checker()
+        deadline = time.time() + timeout
+        while not self._arm.new_joint_state_available:
+            if time.time() > deadline:
+                self.get_logger().warn(
+                    f"[GAP] No fresh joint_state in {timeout:.1f}s — reading last available"
+                )
+                break
+            time.sleep(0.01)
+        return self._read_finger_gap()
+
+    def _settle_release(self, n_states: int) -> float:
+        """Wait for n_states fresh joint_state messages after gripper open.
+        RTF-independent: each _read_finger_gap_fresh call waits for one broadcaster tick."""
+        gap = 0.0
+        for _ in range(n_states):
+            gap = self._read_finger_gap_fresh(self._joint_state_fresh_timeout)
+        return gap
+
+    def _add_bin_collision_object(self):
+        """Publish a solid-box CollisionObject for the drop bin up to rim height.
+        The gripper always releases above the rim, so this conservative representation
+        blocks MoveIt from planning through the bin structure."""
+        co = CollisionObject()
+        co.header.frame_id = 'world'
+        co.header.stamp = self.get_clock().now().to_msg()
+        co.id = 'drop_bin'
+        co.operation = CollisionObject.ADD
+
+        prim = SolidPrimitive()
+        prim.type = SolidPrimitive.BOX
+        prim.dimensions = [self._bin_footprint, self._bin_footprint, self._bin_rim_height]
+        co.primitives = [prim]
+
+        pose = Pose()
+        pose.position.x = self._place_x
+        pose.position.y = self._place_y
+        pose.position.z = self._bin_rim_height / 2.0
+        pose.orientation.w = 1.0
+        co.primitive_poses = [pose]
+
+        self._co_pub.publish(co)
+        self.get_logger().info(
+            f"[BIN CO] Published drop_bin at ({self._place_x:.2f}, {self._place_y:.2f}), "
+            f"footprint={self._bin_footprint:.2f}m, rim_h={self._bin_rim_height:.2f}m"
+        )
+
+    def _place_object(self, quat_xyzw: list, target_co_id: str, skip_place: bool) -> bool:
+        """Steps 5–7 + HOME: three-phase transport → lower → release → retract → HOME.
+
+        Transport strategy (three phases):
+          A. Cartesian lift-clear: straight up to transport_clear_z — short, high fraction.
+          B. Joint-space transfer: OMPL to place_pre_pos with grasp orientation as IK target.
+             OMPL plans freely over the long arc; no orientation-seed IK → no "joint limits" fail.
+          C. Cartesian lower: straight down to place_release_z, orientation locked.
+
+        The arm only reorients its wrist AFTER release (HOME joint-space, gripper empty).
+        """
+        if skip_place:
+            # Debug path: old behaviour — go HOME while holding the object.
+            self._arm.max_velocity = self._arm_default_velocity
+            self._arm.max_acceleration = self._arm_default_acceleration
+            self.get_logger().info("[STEP 5/5] SKIP_PLACE → HOME (debug, object held)")
+            t0 = time.time()
+            self._arm.move_to_configuration(
+                joint_positions=HOME_JOINT_POSITIONS, joint_names=robot.joint_names()
+            )
+            ok = self._arm.wait_until_executed()
+            self.get_logger().info(
+                f"[STEP 5/5] Home {'reached' if ok else 'FAILED'} in {time.time()-t0:.2f}s"
+            )
+            if self._use_collision_scene:
+                try:
+                    self._arm.detach_collision_object(id=target_co_id)
+                    self._arm.remove_collision_object(id=target_co_id)
+                except Exception as e:
+                    self.get_logger().warn(f"[SKIP_PLACE] Detach failed (non-fatal): {e}")
+                self._restore_acm(target_co_id)
+            self._active_co_id = None
+            self._active_co = None
+            return True
+
+        # Pre-compute waypoints. All z values are TCP-in-world.
+        # clear_pos shares x/y with the current grasp so Phase A is a pure vertical move.
+        js_now = self._arm.joint_state
+        current_tcp = None
+        if js_now is not None:
+            # Approximate current TCP position from grasp plan data passed in via the closure
+            # (we don't have FK here). Use contact_pos x/y + clear_z as safe approximation.
+            pass  # current_tcp unused; clear_pos computed from lift_pos below
+
+        # Phase A target: directly above the current grasp position (lift_pos x/y), at clear_z.
+        # This is reached from lift_pos via a very short Cartesian move.
+        # We read the approximate x/y from the grasp quat (not needed); the Cartesian
+        # planner will start from the current EE position automatically.
+        # clear_pos x/y are set to place_x/y so Phase B is a pure horizontal+descent.
+        # Instead use the approach: clear at place_x/y works if the arm can go there;
+        # but the cleanest is: first go straight UP from wherever we are, then across.
+        # We achieve "straight up" by calling Cartesian with only z changed.
+        # Since we don't have current EE pos here, we pass the target with the
+        # SAME quat; pymoveit2 Cartesian will compute the path from the current config.
+        # transport_clear_z is the target for the joint-space transfer.
+        # It sits above the bin rim (0.10m) with enough vertical clearance to then Cartesian-lower.
+        transfer_pos = [self._place_x, self._place_y, self._transport_clear_z]
+        place_release_pos = [self._place_x, self._place_y, self._place_release_z]
+        retract_pos = [self._place_x, self._place_y,
+                       self._place_release_z + self._safe_retract_height]
+
+        self._arm.max_velocity = self._transport_velocity
+        self._arm.max_acceleration = self._transport_acceleration
+
+        def _co_detach_remove():
+            if self._use_collision_scene:
+                try:
+                    self._arm.detach_collision_object(id=target_co_id)
+                    self._arm.remove_collision_object(id=target_co_id)
+                except Exception as e:
+                    self.get_logger().warn(f"[PLACE] Detach/remove failed: {e}")
+
+        # ── Step 5/7: joint-space transfer → above bin ───────────────────────────
+        # OMPL plans the long lateral arc freely. Orientation (quat_xyzw) is an IK GOAL
+        # on the TARGET, not a path constraint, so pick_ik finds a valid seed without hitting
+        # joint limits. Both start (lift, gripper-down) and goal (above bin, gripper-down)
+        # share a similar wrist configuration → OMPL finds a smooth path.
+        self.get_logger().info(
+            f"[STEP 5/7] TRANSFER → {[f'{v:.3f}' for v in transfer_pos]}"
+            f"  (joint-space, orient=target, vel={self._transport_velocity})"
+        )
+        t0 = time.time()
+        self._arm.move_to_pose(position=transfer_pos, quat_xyzw=quat_xyzw, cartesian=False)
+        ok = self._arm.wait_until_executed()
+        if not ok:
+            self.get_logger().warn(
+                f"[STEP 5/7] TRANSFER FAILED in {time.time()-t0:.2f}s — aborting"
+            )
+            _co_detach_remove()
+            return self._abort_grasp(target_co_id)
+        self.get_logger().info(f"[STEP 5/7] Transfer done in {time.time()-t0:.2f}s")
+
+        gap = self._read_finger_gap_fresh(self._joint_state_fresh_timeout)
+        if gap < self._min_finger_gap:
+            self.get_logger().warn(
+                f"[STEP 5/7] Object dropped during transfer "
+                f"(gap={gap*1000:.1f}mm < {self._min_finger_gap*1000:.0f}mm) — aborting"
+            )
+            _co_detach_remove()
+            return self._abort_grasp(target_co_id)
+
+        # ── Step 6/7: Cartesian lower → place_release ────────────────────────────
+        # Short descent (transport_clear_z → place_release_z ≈ 19cm). Fraction should be
+        # high: starting from directly above the release point, same orientation.
+        self.get_logger().info(
+            f"[STEP 6/7] LOWER → {[f'{v:.3f}' for v in place_release_pos]}"
+        )
+        t0 = time.time()
+        self._arm.move_to_pose(
+            position=place_release_pos, quat_xyzw=quat_xyzw,
+            cartesian=True,
+            cartesian_max_step=self._cartesian_max_step_approach,
+            cartesian_fraction_threshold=self._cartesian_fraction_threshold,
+        )
+        ok = self._arm.wait_until_executed()
+        if not ok:
+            self.get_logger().warn(
+                f"[STEP 6/7] LOWER FAILED in {time.time()-t0:.2f}s — aborting"
+            )
+            _co_detach_remove()
+            return self._abort_grasp(target_co_id)
+        self.get_logger().info(f"[STEP 6/7] Release position reached in {time.time()-t0:.2f}s")
+
+        gap = self._read_finger_gap_fresh(self._joint_state_fresh_timeout)
+        if gap < self._min_finger_gap:
+            self.get_logger().warn(
+                f"[STEP 6/7] Object dropped during lower "
+                f"(gap={gap*1000:.1f}mm < {self._min_finger_gap*1000:.0f}mm) — aborting"
+            )
+            _co_detach_remove()
+            return self._abort_grasp(target_co_id)
+
+        # ── Step 7/7: open gripper → release object ────────────────────────────
+        self.get_logger().info("[STEP 7/7] RELEASING OBJECT")
+        self._gripper.open()
+        self._gripper.wait_until_executed()
+        # Accumulate N fresh joint_state messages so the object has sim-time to fall
+        # free before the retract move. RTF-independent: each call waits for one
+        # broadcaster tick at 50 Hz sim (~release_settle_states * 20ms sim = 0.4s sim).
+        gap_after_open = self._settle_release(self._release_settle_states)
+        self.get_logger().info(
+            f"[STEP 7/7] Finger gap after open: {gap_after_open*1000:.1f}mm "
+            f"(~0=gripper stuck/not open, ~40=fully open)"
+        )
+
+        _co_detach_remove()
         if self._use_collision_scene:
-            try:
-                self._arm.detach_collision_object(id=target_co_id)
-                self._arm.remove_collision_object(id=target_co_id)
-                self.get_logger().info(f"[STEP 6] Detached and removed '{target_co_id}'")
-            except Exception as e:
-                self.get_logger().warn(f"[STEP 6] Detach/remove failed (non-fatal): {e}")
             self._restore_acm(target_co_id)
+            self.get_logger().info(f"[STEP 7/7] Detached '{target_co_id}', ACM restored")
 
         self._active_co_id = None
         self._active_co = None
 
-        return True  # lift succeeded — object was grasped and raised
+        # ── Retract: Cartesian +Z before going HOME ────────────────────────────
+        self.get_logger().info(f"[RETRACT] Cartesian retract → z={retract_pos[2]:.3f}")
+        self._arm.move_to_pose(
+            position=retract_pos, quat_xyzw=quat_xyzw,
+            cartesian=True,
+            cartesian_max_step=self._cartesian_max_step_approach,
+            cartesian_fraction_threshold=self._cartesian_fraction_threshold,
+        )
+        ok = self._arm.wait_until_executed()
+        if not ok:
+            self.get_logger().warn("[RETRACT] Retract failed (non-fatal) — proceeding to HOME")
+
+        # ── HOME: joint-space (gripper empty → wrist reorientation safe) ──────
+        self._arm.max_velocity = self._arm_default_velocity
+        self._arm.max_acceleration = self._arm_default_acceleration
+        self.get_logger().info("[HOME] Returning to home (object released)")
+        t0 = time.time()
+        self._arm.move_to_configuration(
+            joint_positions=HOME_JOINT_POSITIONS, joint_names=robot.joint_names()
+        )
+        ok = self._arm.wait_until_executed()
+        self.get_logger().info(
+            f"[HOME] {'Reached' if ok else 'FAILED'} in {time.time()-t0:.2f}s"
+        )
+        return True  # place succeeded
 
 
 def main(args=None):

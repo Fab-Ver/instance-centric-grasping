@@ -356,9 +356,11 @@
     <disableFixedJointLumping>true</disableFixedJointLumping>
   </gazebo>
 
-    <!-- Finger friction for gz-sim/DART: mu1/mu2 are mapped to surface.friction.ode.mu
-         by sdformat URDF→SDF conversion. Aligned with object mu=1.5 for friction-based lift.
-         kp/kd/minDepth/maxVel are ODE contact params not used by DART — removed. -->
+    <!-- Finger friction for gz-sim/DART: mu1/mu2 are the only way to set friction from URDF.
+         They map to surface.friction.ode.mu/mu2 via sdformat shortcut.
+         Do NOT add an explicit <collision> block here: it would override these shortcuts,
+         discarding the mu values and leaving DART with default (0 or 1) friction.
+         kp/kd/minDepth/maxVel are ODE contact params ignored by DART — not set. -->
     <gazebo reference="panda_leftfinger">
       <mu1>1.5</mu1>
       <mu2>1.5</mu2>

@@ -2,6 +2,7 @@
 string target
 float32 min_score
 int32 max_attempts
+bool skip_place        # if true: grasp+lift+HOME only (debug); default false = full pick-and-place
 ---
 bool success
 int32 grasps_attempted
