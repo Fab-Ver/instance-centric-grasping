@@ -4,7 +4,8 @@ from threading import Lock, Thread
 import numpy as np
 import rclpy
 import rclpy.duration
-from geometry_msgs.msg import Point, Pose
+from geometry_msgs.msg import Point, Pose, PoseStamped
+from tf2_msgs.msg import TFMessage
 from shape_msgs.msg import SolidPrimitive
 from ros_gz_interfaces.msg import Entity
 from ros_gz_interfaces.srv import SetEntityPose
@@ -194,6 +195,7 @@ class GraspExecutorNode(Node):
         self.create_subscription(GraspArray, rich_topic, self._grasps_cb, 10, callback_group=cb_sub)
 
         self._current_grasp_pub = self.create_publisher(MarkerArray, '/icgnet/current_grasp_marker', 1)
+        self._object_pose_pub = self.create_publisher(PoseStamped, '/icgnet/object_pose', 1)
 
         self._set_entity_client = self.create_client(
             SetEntityPose, '/world/icgnet_world/set_pose', callback_group=cb_svc
@@ -210,6 +212,13 @@ class GraspExecutorNode(Node):
         self._active_co_id: str | None = None
         self._active_co: CollisionObject | None = None
 
+        # Object pose from gz-sim dynamic_pose/info — used for physical success check.
+        self._object_pose_lock = Lock()
+        self._object_pose: Point | None = None
+        self.create_subscription(
+            TFMessage, '/model_poses', self._model_poses_cb, 10, callback_group=cb_sub
+        )
+
         self.create_service(ExecuteGrasp, '/icgnet/execute_grasp', self._execute_grasp_cb, callback_group=cb_grasp_exec)
 
         # Published lazily on the first execute_grasp call, when move_group is ready.
@@ -220,6 +229,38 @@ class GraspExecutorNode(Node):
     def _grasps_cb(self, msg: GraspArray):
         with self._grasps_lock:
             self._latest_grasps = msg
+
+    def _model_poses_cb(self, msg: TFMessage):
+        for transform in msg.transforms:
+            if transform.child_frame_id == self._object_entity_name:
+                t = transform.transform.translation
+                with self._object_pose_lock:
+                    self._object_pose = Point(x=t.x, y=t.y, z=t.z)
+                ps = PoseStamped()
+                ps.header.frame_id = 'world'
+                ps.header.stamp = self.get_clock().now().to_msg()
+                ps.pose.position.x = t.x
+                ps.pose.position.y = t.y
+                ps.pose.position.z = t.z
+                ps.pose.orientation.w = 1.0
+                self._object_pose_pub.publish(ps)
+                return
+
+    def _object_in_bin(self) -> bool | None:
+        """Return True if the tracked object is inside the drop bin footprint.
+
+        Returns None when no pose is available (bridge not yet connected).
+        Uses a +5 cm z-margin above the rim to tolerate bounce during settle.
+        """
+        with self._object_pose_lock:
+            pose = self._object_pose
+        if pose is None:
+            return None
+        half = self._bin_footprint / 2.0
+        in_x = abs(pose.x - self._place_x) <= half
+        in_y = abs(pose.y - self._place_y) <= half
+        in_z = pose.z <= self._bin_rim_height + 0.05
+        return in_x and in_y and in_z
 
     def _reset_scene(self, teleport_object: bool = True):
         # Remove active CO from the planning scene BEFORE any motion planning.
@@ -962,7 +1003,32 @@ class GraspExecutorNode(Node):
         self.get_logger().info(
             f"[HOME] {'Reached' if ok else 'FAILED'} in {time.time()-t0:.2f}s"
         )
-        return True  # place succeeded
+
+        # Physical success check: verify the object landed in the bin.
+        result = self._object_in_bin()
+        if result is None:
+            self.get_logger().warn(
+                "[PLACE] No object pose from /model_poses — physical check skipped "
+                "(bridge not connected). Reporting success by arm motion only."
+            )
+            return True
+        if result:
+            with self._object_pose_lock:
+                p = self._object_pose
+            self.get_logger().info(
+                f"[PLACE] SUCCESS: object in bin "
+                f"(pose=[{p.x:.3f}, {p.y:.3f}, {p.z:.3f}], "
+                f"bin=[{self._place_x:.3f}, {self._place_y:.3f}] ±{self._bin_footprint/2:.3f})"
+            )
+            return True
+        with self._object_pose_lock:
+            p = self._object_pose
+        self.get_logger().warn(
+            f"[PLACE] FAILURE: object NOT in bin after release — "
+            f"pose=[{p.x:.3f}, {p.y:.3f}, {p.z:.3f}], "
+            f"bin=[{self._place_x:.3f}, {self._place_y:.3f}] ±{self._bin_footprint/2:.3f}"
+        )
+        return False
 
 
 def main(args=None):

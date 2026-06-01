@@ -309,6 +309,24 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /icgnet/current_grasp_marker
       Value: true
+    - Class: rviz_default_plugins/Pose
+      Enabled: true
+      Name: Object Pose (gz-sim)
+      Arrow Length: 0.12
+      Head Length: 0.04
+      Head Radius: 0.02
+      Shaft Length: 0.08
+      Shaft Radius: 0.01
+      Color: 255; 165; 0
+      Alpha: 1.0
+      Shape: Arrow
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /icgnet/object_pose
+      Value: true
     - Class: rviz_default_plugins/MarkerArray
       Enabled: false
       Name: ICGNet All Grasps (heatmap)

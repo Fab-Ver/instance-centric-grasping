@@ -25,8 +25,8 @@
               <surface>
           <friction>
             <ode>
-              <mu>1.5</mu>
-              <mu2>1.5</mu2>
+              <mu>0.5</mu>
+              <mu2>0.5</mu2>
             </ode>
             <torsional>
               <coefficient>0.5</coefficient>

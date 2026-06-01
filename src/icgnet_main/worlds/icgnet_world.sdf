@@ -3,7 +3,8 @@
   <world name="icgnet_world">
 
     <!-- Physics: DART solver (superior friction/contact vs ODE).
-         Step 1ms at 1000 Hz = real-time physics. -->
+         Step size and RTF use gz-sim defaults (1 ms / 1000 Hz); no explicit <physics>
+         block is needed — the controller update_rate in ros_control.yaml drives the loop. -->
     <plugin filename="libignition-gazebo6-physics-system.so"
             name="ignition::gazebo::systems::Physics">
       <engine>
@@ -105,8 +106,8 @@
             </clip>
           </camera>
           <always_on>1</always_on>
-          <!-- 5 Hz is sufficient: ICGNet inference is on-demand (uses last frame on /trigger).
-               30 Hz in software rendering (WSL2) was killing RTF → arm moves appeared frozen. -->
+          <!-- 1 Hz is sufficient: ICGNet inference is on-demand (uses last frame on /trigger).
+               Higher rates in software rendering (WSL2) kill RTF → arm moves appear frozen. -->
           <update_rate>1</update_rate>
           <visualize>false</visualize>
           <!-- Topic base: publishes to /camera/rgbd_camera/{image,depth_image,points,camera_info} -->

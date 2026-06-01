@@ -362,13 +362,13 @@
          discarding the mu values and leaving DART with default (0 or 1) friction.
          kp/kd/minDepth/maxVel are ODE contact params ignored by DART — not set. -->
     <gazebo reference="panda_leftfinger">
-      <mu1>1.5</mu1>
-      <mu2>1.5</mu2>
+      <mu1>1.0</mu1>
+      <mu2>1.0</mu2>
     </gazebo>
 
     <gazebo reference="panda_rightfinger">
-      <mu1>1.5</mu1>
-      <mu2>1.5</mu2>
+      <mu1>1.0</mu1>
+      <mu2>1.0</mu2>
     </gazebo>
 
   <!-- gz_ros2_control plugin (Gazebo Sim / Fortress) -->
@@ -458,7 +458,9 @@
       </joint>
 
       <!-- Gripper: effort interface + PID — applies continuous squeezing force
-           even when blocked by an object. Required for friction-based grasping. -->
+           even when blocked by an object. Required for friction-based grasping.
+           Hardware max is 70 N; lower clamp prevents full opening due to PID integral
+           windup accumulated during long transport phases. -->
       <joint name="panda_finger_joint1">
         <command_interface name="effort">
           <param name="min">-70</param>
