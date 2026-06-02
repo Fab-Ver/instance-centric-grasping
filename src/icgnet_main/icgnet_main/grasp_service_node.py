@@ -133,7 +133,7 @@ class ICGNetGraspNode(Node):
         self.declare_parameter('exclude_bin', True)
         self.declare_parameter('exclude_bin_x', 0.45)
         self.declare_parameter('exclude_bin_y', -0.50)
-        self.declare_parameter('exclude_bin_footprint', 0.30)
+        self.declare_parameter('exclude_bin_footprint', 0.36)
         self.declare_parameter('exclude_bin_z_max', 0.12)
 
         config_path = os.path.expanduser(
@@ -251,6 +251,28 @@ class ICGNetGraspNode(Node):
         co.operation = CollisionObject.ADD
         return co
 
+    def _clip_mesh_exclude_bin(self, mesh):
+        """Remove faces whose vertices fall inside the drop-bin AABB. Returns None if mesh is empty."""
+        import trimesh
+        half = self._bin_footprint / 2.0
+        v = mesh.vertices
+        in_bin = (
+            (v[:, 0] >= self._bin_x - half) &
+            (v[:, 0] <= self._bin_x + half) &
+            (v[:, 1] >= self._bin_y - half) &
+            (v[:, 1] <= self._bin_y + half) &
+            (v[:, 2] <= self._bin_z_max)
+        )
+        bad = set(np.where(in_bin)[0])
+        if not bad:
+            return mesh
+        good_faces = [f for f in mesh.faces if not (bad & set(f))]
+        if not good_faces:
+            return None
+        clipped = trimesh.Trimesh(vertices=v, faces=np.array(good_faces), process=False)
+        clipped.remove_unreferenced_vertices()
+        return clipped
+
     def _publish_collision_objects_from_reconstructions(self, reconstructions: list, frame_id: str):
         """
         Remove previously published collision objects, then publish one per ICGNet instance.
@@ -280,6 +302,12 @@ class ICGNetGraspNode(Node):
             if len(mesh.faces) == 0:
                 self.get_logger().warn(f"Instance {inst_id}: empty mesh, skipping collision object.")
                 continue
+
+            if self._exclude_bin:
+                mesh = self._clip_mesh_exclude_bin(mesh)
+                if mesh is None or len(mesh.faces) == 0:
+                    self.get_logger().warn(f"Instance {inst_id}: mesh entirely in bin region, skipping.")
+                    continue
 
             if use_hull:
                 try:

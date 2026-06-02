@@ -82,5 +82,5 @@ icgnet_grasp_node:
     exclude_bin: true
     exclude_bin_x: 0.45
     exclude_bin_y: -0.50
-    exclude_bin_footprint: 0.30
+    exclude_bin_footprint: 0.36
     exclude_bin_z_max: 0.12
