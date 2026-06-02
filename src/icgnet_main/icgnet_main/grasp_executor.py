@@ -339,6 +339,14 @@ class GraspExecutorNode(Node):
         with self._grasps_lock:
             self._latest_grasps = None
 
+        # Return arm to HOME and open gripper BEFORE triggering inference.
+        # At inference time the camera must see only the object: if the arm is at
+        # a post-grasp position (above object, mid-lift, etc.) it enters the camera
+        # FOV and ICGNet reconstructs it as a spurious instance, producing false
+        # collision objects and degrading grasp selection.
+        self.get_logger().info('[RESET] Moving arm to home before inference (clean scene for ICGNet)...')
+        self._reset_scene(teleport_object=False)
+
         if not self._compute_client.wait_for_service(timeout_sec=5.0):
             res.success = False
             res.message = f"Service '{self._compute_client.srv_name}' not available"
@@ -389,9 +397,6 @@ class GraspExecutorNode(Node):
                 f"approach=[{approach[0]:.3f},{approach[1]:.3f},{approach[2]:.3f}] "
                 f"angle_from_vertical={angle_from_vertical:.1f}° width={g.width:.3f}"
             )
-
-        self.get_logger().info('[RESET] Resetting arm/gripper before first attempt (object stays at inference position)...')
-        self._reset_scene(teleport_object=False)
 
         for i, g in enumerate(candidates):
             p = g.pose.position

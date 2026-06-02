@@ -76,6 +76,13 @@ class ICGNetPredictor:
                 return_scene_grasps=True,
             )
 
+        _logger.info(
+            f"Raw grasp tensors: rot={output.scene_grasp_poses[0].shape}, "
+            f"centers={output.scene_grasp_poses[1].shape}, "
+            f"scores={output.scene_grasp_poses[2].shape}, "
+            f"class_preds={output.class_predictions.shape}"
+        )
+
         if return_meshes:
             _logger.info(f"Reconstructed {len(output.reconstructions)} instance mesh(es).")
         _logger.info("Inference complete.")

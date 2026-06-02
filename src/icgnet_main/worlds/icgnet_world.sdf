@@ -140,7 +140,7 @@
           <always_on>1</always_on>
           <!-- 1 Hz is sufficient: ICGNet inference is on-demand (uses last frame on /trigger).
                Higher rates in software rendering (WSL2) kill RTF → arm moves appear frozen. -->
-          <update_rate>1</update_rate>
+          <update_rate>15</update_rate>
           <visualize>false</visualize>
           <!-- Topic base: publishes to /camera/rgbd_camera/{image,depth_image,points,camera_info} -->
           <topic>/camera/rgbd_camera</topic>

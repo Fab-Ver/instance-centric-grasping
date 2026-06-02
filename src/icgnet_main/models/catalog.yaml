@@ -14,8 +14,8 @@ mug:
 box:
   class_id: 1
   models:
-    - wood_cube    # [prim] 50x50x50mm wooden cube
-    - cardboard_box  # [prim] 100x80x120mm cardboard box
+    - wood_cube    # [prim] 70x70x70mm wooden cube (~343cm3, similar volume to beer_can)
+    - cardboard_box  # [prim] 65x60x90mm cardboard box (~351cm3, all dims graspable <72mm)
 can:
   class_id: 2
   models:
@@ -35,8 +35,8 @@ cylindric:
 ball:
   class_id: 5
   models:
-    - tennis_ball   # [prim] sphere r=32mm
-    - baseball      # [prim] sphere r=37mm
+    - tennis_ball   # [prim] sphere r=44mm (~357cm3, similar volume to beer_can)
+    - baseball      # [prim] sphere r=46mm (~408cm3)
 other:
   class_id: 6
   models:

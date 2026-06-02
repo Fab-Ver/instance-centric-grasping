@@ -425,6 +425,7 @@ class ICGNetGraspNode(Node):
         # We index it with inst_id as a best-effort mapping: works when
         # class_predictions is actually (N_instance_queries,). If the shapes
         # don't match, we fall back to class 6 (other) and log a warning.
+        cls_arr = np.array([], dtype=np.int64)
         try:
             cls_arr = output.class_predictions.cpu().numpy()
             sem_class_raw = np.array(
@@ -436,6 +437,15 @@ class ICGNetGraspNode(Node):
             sem_class_raw = np.full(len(inst_ids), 6, dtype=np.int32)
 
         n_total = len(centers)
+
+        # Log predicted semantic class per reconstructed instance (visible even when 0 grasps).
+        if output.reconstructions:
+            for item in output.reconstructions:
+                mesh, inst_id = item if isinstance(item, tuple) else (item, 0)
+                cls_id = int(cls_arr[inst_id]) if inst_id < len(cls_arr) else 6
+                self.get_logger().info(
+                    f"[RECON] inst_{inst_id} → class={CLASS_NAMES.get(cls_id, '?')} (id={cls_id})"
+                )
 
         # Log per-instance classification summary.
         unique_insts = np.unique(inst_ids.astype(int))
