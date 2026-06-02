@@ -4,14 +4,14 @@
     <link name="link">
       <inertial>
         <mass>0.145</mass>
-        <!-- sphere: r=0.046m — I=2/5*m*r² -->
+        <!-- sphere: r=0.039m — I=2/5*m*r² -->
         <inertia>
-          <ixx>0.0001227</ixx><ixy>0</ixy><ixz>0</ixz>
-          <iyy>0.0001227</iyy><iyz>0</iyz><izz>0.0001227</izz>
+          <ixx>0.0000882</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>0.0000882</iyy><iyz>0</iyz><izz>0.0000882</izz>
         </inertia>
       </inertial>
       <collision name="collision">
-        <geometry><sphere><radius>0.046</radius></sphere></geometry>
+        <geometry><sphere><radius>0.039</radius></sphere></geometry>
               <surface>
           <friction>
             <ode>
@@ -34,7 +34,7 @@
         </surface>
       </collision>
       <visual name="visual">
-        <geometry><sphere><radius>0.046</radius></sphere></geometry>
+        <geometry><sphere><radius>0.039</radius></sphere></geometry>
         <material>
           <ambient>1.0 1.0 1.0 1</ambient><diffuse>1.0 1.0 1.0 1</diffuse>
         </material>

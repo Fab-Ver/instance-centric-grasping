@@ -505,21 +505,30 @@ class ICGNetModule(nn.Module):
                     )[0]
                     return occ_values.cpu().squeeze()
 
+                # Use tight per-instance bounds from input points instead of full
+                # scene bounds. With scene bounds (~0.9x1.1x0.7m) at res=64 each
+                # voxel is ~12-15mm — too coarse for small objects. Per-instance
+                # bounds give ~2-4mm voxels for typical graspable objects.
+                _margin = 0.05
+                _inst_mask = embeddings.pointwise_labels == idx
+                if _inst_mask.any():
+                    _inst_pts = coords[_inst_mask]
+                    _vol_min = (_inst_pts.min(0)[0] - _margin).cpu().numpy().tolist()
+                    _vol_max = (_inst_pts.max(0)[0] + _margin).cpu().numpy().tolist()
+                else:
+                    _vol_min = (scene_bounds[0][0].cpu().numpy() - 0.05).squeeze().tolist()
+                    _vol_max = (scene_bounds[1][0].cpu().numpy() + 0.05).squeeze().tolist()
+
                 gen = Generator3D(
                     get_sdf_value,
-                    resolution0=self.mesh_resolution,  # 128, #32,
+                    resolution0=self.mesh_resolution,
                     points_batch_size=4096 * 4,
                     scale=1,
                     translation=0,
                     threshold=0,
                 )
                 mesh = gen.generate_mesh(
-                    volume_bounds=np.array(
-                        [
-                            (scene_bounds[0][0].cpu().numpy() - 0.05).squeeze().tolist(),
-                            (scene_bounds[1][0].cpu().numpy() + 0.05).squeeze().tolist(),
-                        ]
-                    )
+                    volume_bounds=np.array([_vol_min, _vol_max])
                 )
                 meshes.append(mesh)
 

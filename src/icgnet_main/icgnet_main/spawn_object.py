@@ -9,7 +9,9 @@ import time
 import yaml
 import rclpy
 from ament_index_python.packages import get_package_share_directory
+from geometry_msgs.msg import Point
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 
 
 def _half_height_from_sdf(sdf_path: str) -> float:
@@ -90,6 +92,17 @@ class ObjectSpawner(Node):
         self.get_logger().info(f'Total objects: {self.num_objects}')
         self.get_logger().info('==========================================')
 
+        self._spawn_pose_pub = self.create_publisher(
+            Point,
+            '/icgnet/object_spawn_pose',
+            QoSProfile(
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                history=HistoryPolicy.KEEP_LAST,
+                depth=1,
+            ),
+        )
+
     def _get_random_pose(self, existing_poses: list) -> tuple[float | None, float | None]:
         for _ in range(500):
             x = random.uniform(self._spawn_x_min, self._spawn_x_max)
@@ -166,6 +179,12 @@ class ObjectSpawner(Node):
             if proc.returncode == 0:
                 self.get_logger().info(f'[{entity_name}] Spawned successfully.')
                 existing_poses.append((x, y))
+                if entity_name == 'target_obj':
+                    pt = Point(x=float(x), y=float(y), z=float(spawn_z))
+                    self._spawn_pose_pub.publish(pt)
+                    self.get_logger().info(
+                        f'[{entity_name}] Spawn pose published: ({x:.3f}, {y:.3f}, {spawn_z:.4f})'
+                    )
             else:
                 self.get_logger().error(f'[{entity_name}] Spawn failed (exit {proc.returncode}).')
         except Exception as e:
@@ -176,6 +195,8 @@ def main():
     rclpy.init()
     node = ObjectSpawner()
     node.spawn_all()
+    # Brief spin to let DDS propagate the latched spawn_pose message before shutdown.
+    rclpy.spin_once(node, timeout_sec=0.5)
     rclpy.shutdown()
 
 

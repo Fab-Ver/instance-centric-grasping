@@ -22,10 +22,6 @@ icgnet_grasp_node:
     # Number of grasps to generate per scene
     n_grasps: 32
 
-    # Minimum ICGNet score threshold [0.0 - 1.0].
-    # 0.0 = publish all; raise (e.g. 0.5) to reduce false positives.
-    score_threshold: 0.0
-
     # Workspace bounding box (world frame, metres).
     # Points outside are removed BEFORE passing to ICGNet. Objects spawn on the
     # table (z~0.05m top); z_min=0.01 keeps object points while excluding the

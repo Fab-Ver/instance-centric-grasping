@@ -114,7 +114,6 @@ class ICGNetGraspNode(Node):
         self.declare_parameter('target_frame', 'world')
         self.declare_parameter('voxel_size', 0.003)
         self.declare_parameter('n_grasps', 32)
-        self.declare_parameter('score_threshold', 0.0)
         self.declare_parameter('workspace_x_min', 0.25)
         self.declare_parameter('workspace_x_max', 1.05)
         self.declare_parameter('workspace_y_min', -0.50)
@@ -145,7 +144,6 @@ class ICGNetGraspNode(Node):
         self.target_frame = self.get_parameter('target_frame').get_parameter_value().string_value
         self.voxel_size = self.get_parameter('voxel_size').get_parameter_value().double_value
         self.n_grasps = self.get_parameter('n_grasps').get_parameter_value().integer_value
-        self.score_threshold = self.get_parameter('score_threshold').get_parameter_value().double_value
         self.workspace_bounds = {
             'x': (self.get_parameter('workspace_x_min').get_parameter_value().double_value,
                   self.get_parameter('workspace_x_max').get_parameter_value().double_value),
@@ -343,12 +341,9 @@ class ICGNetGraspNode(Node):
             response.message = f"Error: {e}"
             return response
 
-        n_total, n_filtered = result
+        n_total = result
         response.success = True
-        response.message = (
-            f"Published {n_filtered} grasps "
-            f"({n_total} total, score>={self.score_threshold:.2f})"
-        )
+        response.message = f"Published {n_total} grasps"
         self.get_logger().info(response.message)
         return response
 
@@ -458,13 +453,23 @@ class ICGNetGraspNode(Node):
             f"[INSTANCES] {len(unique_insts)} instance(s): {', '.join(inst_summary)} | total_grasps={n_total}"
         )
 
-        mask = scores >= self.score_threshold
-        rot_filtered     = rot_matrices[mask]
-        centers_filtered = centers[mask]
-        scores_filtered  = scores[mask]
-        widths_filtered  = widths[mask]
-        inst_filtered    = inst_ids[mask]
-        cls_filtered     = sem_class_raw[mask]
+        if n_total > 0:
+            s_sorted = np.sort(scores)[::-1]
+            top_k = min(10, n_total)
+            self.get_logger().info(
+                f"[SCORES] top-{top_k}: {[round(float(s), 4) for s in s_sorted[:top_k]]} | "
+                f"min={s_sorted[-1]:.4f} max={s_sorted[0]:.4f} mean={scores.mean():.4f} | "
+                f">0.3: {int((scores > 0.3).sum())} "
+                f">0.5: {int((scores > 0.5).sum())} "
+                f">0.7: {int((scores > 0.7).sum())}"
+            )
+
+        rot_filtered     = rot_matrices
+        centers_filtered = centers
+        scores_filtered  = scores
+        widths_filtered  = widths
+        inst_filtered    = inst_ids
+        cls_filtered     = sem_class_raw
 
         now = self.get_clock().now().to_msg()
 
@@ -509,7 +514,7 @@ class ICGNetGraspNode(Node):
                 f"Published {len(self._published_collision_ids)} collision object(s) to MoveIt2."
             )
 
-        return n_total, mask.sum()
+        return n_total
 
 
 def main(args=None):

@@ -1,6 +1,5 @@
 # target: 'any' | 'mug' | 'box' | 'can' | 'bottle' | 'cylindric' | 'ball' | 'other' | 'instance_<N>'
 string target
-float32 min_score
 int32 max_attempts
 bool skip_place        # if true: grasp+lift+HOME only (debug); default false = full pick-and-place
 ---

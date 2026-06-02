@@ -4,14 +4,14 @@
     <link name="link">
       <inertial>
         <mass>0.100</mass>
-        <!-- box: 0.07x0.07x0.07m — Ixx=Iyy=Izz=m/12*(a²+a²) -->
+        <!-- box: 0.076x0.076x0.076m — Ixx=Iyy=Izz=m/12*(a²+a²) -->
         <inertia>
-          <ixx>0.0000817</ixx><ixy>0</ixy><ixz>0</ixz>
-          <iyy>0.0000817</iyy><iyz>0</iyz><izz>0.0000817</izz>
+          <ixx>0.0000963</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>0.0000963</iyy><iyz>0</iyz><izz>0.0000963</izz>
         </inertia>
       </inertial>
       <collision name="collision">
-        <geometry><box><size>0.070 0.070 0.070</size></box></geometry>
+        <geometry><box><size>0.076 0.076 0.076</size></box></geometry>
               <surface>
           <friction>
             <ode>
@@ -34,7 +34,7 @@
         </surface>
       </collision>
       <visual name="visual">
-        <geometry><box><size>0.070 0.070 0.070</size></box></geometry>
+        <geometry><box><size>0.076 0.076 0.076</size></box></geometry>
         <material>
           <ambient>0.6 0.4 0.2 1</ambient><diffuse>0.6 0.4 0.2 1</diffuse>
         </material>

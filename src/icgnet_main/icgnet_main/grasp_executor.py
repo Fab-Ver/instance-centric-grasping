@@ -14,6 +14,7 @@ from moveit_msgs.msg import (
 )
 from moveit_msgs.srv import GetPlanningScene
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from scipy.spatial.transform import Rotation
@@ -45,7 +46,6 @@ class GraspExecutorNode(Node):
 
         self.declare_parameter('rich_grasp_topic', '/icgnet/grasps_rich')
         self.declare_parameter('compute_grasp_service', '/icgnet/compute_grasps')
-        self.declare_parameter('default_min_score', 0.5)
         self.declare_parameter('default_max_attempts', 5)
         self.declare_parameter('approach_offset', 0.12)
         self.declare_parameter('grasp_forward_offset', 0.045)
@@ -78,7 +78,6 @@ class GraspExecutorNode(Node):
         self._cartesian_fraction_threshold = self.get_parameter('cartesian_fraction_threshold').get_parameter_value().double_value
         self._cartesian_max_step_approach = self.get_parameter('cartesian_max_step_approach').get_parameter_value().double_value
         self._lift_height = self.get_parameter('lift_height').get_parameter_value().double_value
-        self._default_min_score = self.get_parameter('default_min_score').get_parameter_value().double_value
         self._default_max_attempts = self.get_parameter('default_max_attempts').get_parameter_value().integer_value
         self._object_entity_name = self.get_parameter('object_entity_name').get_parameter_value().string_value
         self._object_init_x = self.get_parameter('object_init_x').get_parameter_value().double_value
@@ -123,8 +122,6 @@ class GraspExecutorNode(Node):
         self.declare_parameter('allowed_planning_time', 5.0)
         self.declare_parameter('num_planning_attempts', 10)
         self.declare_parameter('inference_timeout', 120.0)
-        self.declare_parameter('max_approach_angle_deg', 45.0)
-        self.declare_parameter('min_approach_angle_deg', 0.0)
 
         self._use_collision_scene = self.get_parameter('use_collision_scene').get_parameter_value().bool_value
         self._attach_weight = self.get_parameter('attach_weight').get_parameter_value().double_value
@@ -152,8 +149,6 @@ class GraspExecutorNode(Node):
         self._allowed_planning_time = self.get_parameter('allowed_planning_time').get_parameter_value().double_value
         self._num_planning_attempts = self.get_parameter('num_planning_attempts').get_parameter_value().integer_value
         self._inference_timeout = self.get_parameter('inference_timeout').get_parameter_value().double_value
-        self._max_approach_angle_deg = self.get_parameter('max_approach_angle_deg').get_parameter_value().double_value
-        self._min_approach_angle_deg = self.get_parameter('min_approach_angle_deg').get_parameter_value().double_value
 
         # Callback groups: MutuallyExclusive for the grasp service and planning-scene clients
         # to prevent deadlocks in MultiThreadedExecutor (ROS2 guideline).
@@ -194,6 +189,20 @@ class GraspExecutorNode(Node):
         self._grasps_lock = Lock()
         self.create_subscription(GraspArray, rich_topic, self._grasps_cb, 10, callback_group=cb_sub)
 
+        self._object_spawn_pos: Point | None = None
+        self.create_subscription(
+            Point,
+            '/icgnet/object_spawn_pose',
+            self._spawn_pose_cb,
+            QoSProfile(
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                history=HistoryPolicy.KEEP_LAST,
+                depth=1,
+            ),
+            callback_group=cb_sub,
+        )
+
         self._current_grasp_pub = self.create_publisher(MarkerArray, '/icgnet/current_grasp_marker', 1)
         self._object_pose_pub = self.create_publisher(PoseStamped, '/icgnet/object_pose', 1)
 
@@ -229,6 +238,12 @@ class GraspExecutorNode(Node):
     def _grasps_cb(self, msg: GraspArray):
         with self._grasps_lock:
             self._latest_grasps = msg
+
+    def _spawn_pose_cb(self, msg: Point):
+        self._object_spawn_pos = msg
+        self.get_logger().info(
+            f'[SPAWN_POSE] Object spawn pose received: ({msg.x:.3f}, {msg.y:.3f}, {msg.z:.3f})'
+        )
 
     def _model_poses_cb(self, msg: TFMessage):
         for transform in msg.transforms:
@@ -294,20 +309,26 @@ class GraspExecutorNode(Node):
         # predicted grasp poses and cause misses.
         if teleport_object:
             if self._set_entity_client.wait_for_service(timeout_sec=2.0):
+                if self._object_spawn_pos is not None:
+                    rx, ry, rz = (self._object_spawn_pos.x,
+                                  self._object_spawn_pos.y,
+                                  self._object_spawn_pos.z)
+                else:
+                    self.get_logger().warn('[RESET] No spawn pose received — using yaml fallback.')
+                    rx, ry, rz = self._object_init_x, self._object_init_y, self._object_init_z
                 req = SetEntityPose.Request()
                 req.entity.name = self._object_entity_name
                 req.entity.type = Entity.MODEL
-                req.pose.position.x = self._object_init_x
-                req.pose.position.y = self._object_init_y
-                req.pose.position.z = self._object_init_z
+                req.pose.position.x = rx
+                req.pose.position.y = ry
+                req.pose.position.z = rz
                 req.pose.orientation.w = 1.0
                 fut = self._set_entity_client.call_async(req)
                 if not self._wait_for_future(fut):
                     self.get_logger().warn('[RESET] Object reset timed out.')
                 elif fut.result().success:
                     self.get_logger().info(
-                        f'[RESET] Object "{self._object_entity_name}" reset to '
-                        f'[{self._object_init_x}, {self._object_init_y}, {self._object_init_z}]'
+                        f'[RESET] Object "{self._object_entity_name}" reset to [{rx:.3f}, {ry:.3f}, {rz:.3f}]'
                     )
                 else:
                     self.get_logger().warn('[RESET] Object reset service returned failure.')
@@ -321,13 +342,11 @@ class GraspExecutorNode(Node):
 
     def _execute_grasp_cb(self, req: ExecuteGrasp.Request, res: ExecuteGrasp.Response):
         target = req.target.strip() if req.target else 'any'
-        min_score = req.min_score if req.min_score > 0.0 else self._default_min_score
         max_attempts = req.max_attempts if req.max_attempts > 0 else self._default_max_attempts
         skip_place = req.skip_place
 
         self.get_logger().info(
-            f"ExecuteGrasp: target='{target}' min_score={min_score:.2f} max_attempts={max_attempts} "
-            f"skip_place={skip_place}"
+            f"ExecuteGrasp: target='{target}' max_attempts={max_attempts} skip_place={skip_place}"
         )
 
         # Ensure the drop-bin collision object is in the planning scene.
@@ -376,10 +395,14 @@ class GraspExecutorNode(Node):
             res.message = "No grasps received after inference"
             return res
 
-        candidates = self._filter_grasps(grasps.grasps, target, min_score)
+        candidates = self._filter_grasps(grasps.grasps, target)
         if not candidates:
+            available = sorted({CLASS_NAMES.get(g.semantic_class, '?') for g in grasps.grasps})
             res.success = False
-            res.message = f"No grasps after filtering: target='{target}' min_score={min_score:.2f}"
+            res.message = (
+                f"No grasps after filtering: target='{target}' — "
+                f"ICGNet predicted classes: {available}"
+            )
             return res
 
         candidates = candidates[:max_attempts]
@@ -428,15 +451,12 @@ class GraspExecutorNode(Node):
         res.message = f"All {len(candidates)} grasp attempts failed"
         return res
 
-    def _filter_grasps(self, grasps, target: str, min_score: float) -> list:
+    def _filter_grasps(self, grasps, target: str) -> list:
         filtered = []
         n_total = len(grasps)
-        n_score = n_ws = n_width = n_target = n_angle = 0
+        n_ws = n_width = n_target = 0
         for g in grasps:
             p = g.pose.position
-            if g.score < min_score:
-                n_score += 1
-                continue
             if g.width > self._max_grasp_width:
                 n_width += 1
                 continue
@@ -448,12 +468,6 @@ class GraspExecutorNode(Node):
             if not self._matches_target(g, target):
                 n_target += 1
                 continue
-            q = g.pose.orientation
-            approach = Rotation.from_quat([q.x, q.y, q.z, q.w]).as_matrix()[:, 2]
-            angle_deg = float(np.degrees(np.arccos(np.clip(-approach[2], -1.0, 1.0))))
-            if angle_deg > self._max_approach_angle_deg or angle_deg < self._min_approach_angle_deg:
-                n_angle += 1
-                continue
             filtered.append(g)
 
         filtered.sort(key=lambda g: g.score, reverse=True)
@@ -462,9 +476,8 @@ class GraspExecutorNode(Node):
             if filtered else "—"
         )
         self.get_logger().info(
-            f"[FILTER] total={n_total} → kept={len(filtered)} (min_score≥{min_score:.2f}, "
-            f"scores={score_range}, angle=[{self._min_approach_angle_deg:.0f}°–{self._max_approach_angle_deg:.0f}°]) | "
-            f"rejected: score={n_score} width={n_width} workspace={n_ws} target={n_target} angle={n_angle}"
+            f"[FILTER] total={n_total} → kept={len(filtered)} (scores={score_range}) | "
+            f"rejected: width={n_width} workspace={n_ws} target={n_target}"
         )
         return filtered
 
