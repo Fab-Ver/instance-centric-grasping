@@ -2,7 +2,7 @@
 
 **Branch:** `main`
 **Stack:** ROS2 Humble + Gazebo Sim Fortress (gz-sim 6, DART physics) + MoveIt2 + gz_ros2_control
-**Last updated:** 2026-05-31
+**Last updated:** 2026-06-02
 
 ---
 
@@ -246,18 +246,24 @@ ros2 service call /world/icgnet_world/set_pose ros_gz_interfaces/srv/SetEntityPo
 ## Expected Grasp Log Sequence
 
 ```
-[FILTER]  N grasps pass score>=0.50  [0.51–0.84]  angle=[0°–45°]
-[PLAN]    score=0.844  inst=0  cls=2(can)  width=0.0800m
-[GRIPPER] pre-grasp opening=80.0mm (per finger=40.0mm) [CAPPED]
+[SPAWN_POSE] Object spawn pose received: (0.65, 0.00, 0.052)
+[RECON]   inst_0 → class=can (id=2)
+[INSTANCES] 1 instance(s): inst_0=can(id=2, 353g) | total_grasps=353
+[SCORES]  top-10: [0.807, 0.806, ...] | min=0.300 max=0.807 mean=0.559 | >0.3: 353 >0.5: 186 >0.7: 0
+[FILTER]  total=353 → kept=353 (scores=[0.30–0.81]) | rejected: width=0 workspace=0 target=0
+[PLAN]    score=0.807  inst=0  cls=2(can)  width=0.0660m
+[GRIPPER] pre-grasp opening=73.0mm (per finger=36.5mm)
 [RESET]   Re-added CO 'icgnet_inst_0' to scene.
 [STEP 1/5] PRE-GRASP  → [x, y, z+0.12]   Pre-grasp reached in Xs
 [CO]      Removed 'icgnet_inst_0' from scene for approach
 [STEP 2/5] APPROACH   → [x, y, z]   Contact surface reached in Xs
 [STEP 3/5] CLOSING GRIPPER  gap=21.3mm  ✓
 [STEP 3b]  Attached 'icgnet_inst_0' to panda_hand_tcp
-[STEP 4/5] LIFTING    → [x, y, z+0.25]   Object lifted in Xs
-[STEP 5/5] HOME
-[STEP 6]   Detached and removed 'icgnet_inst_0'
+[STEP 4/5] LIFTING    → [x, y, z+0.18]   Object lifted in Xs
+[STEP 5/7] TRANSFER   → (0.45, -0.50, 0.35)
+[STEP 6/7] LOWER      → z=0.26
+[STEP 7/7] OPEN GRIPPER + settle + retract + HOME
+[STEP 8]   Detached and removed 'icgnet_inst_0'
 [SUCCESS]  Grasp completed on attempt 1/5
 ```
 
@@ -272,7 +278,7 @@ ros2 service call /world/icgnet_world/set_pose ros_gz_interfaces/srv/SetEntityPo
 | Gazebo extreme lag without `use_gpu:=true` on WSL2+GPU | Mesa falls back to softpipe instead of D3D12 | Use `use_gpu:=true` to force Mesa D3D12 hardware path |
 | STEP 2 fraction < 0.92 | Collision object blocks Cartesian path | Executor auto-tries next grasp candidate |
 | Finger gap < 5 mm after close | Grasp pose miss or object out of workspace | Executor auto-tries next candidate |
-| Finger gap > 36 mm after close | Object tipped during approach or gripper PID slow to engage | Check approach angle; `gripper_read_settle` in YAML controls settle time |
+| Finger gap > 40 mm after close | Object tipped during approach or gripper PID slow to engage | `gripper_read_settle` in YAML controls settle time |
 | Camera pointcloud silent after 30 s | Sensor thread still initialising | Wait; bridge auto-reconnects |
 | `list_controllers` shows 0 | Controllers not yet spawned (~8 s after gz-sim start) | Wait and retry |
 | Spawn error "entity already exists" | Previous `target_obj` still in world | Delete first (see Object Management) |
@@ -287,5 +293,6 @@ ros2 service call /world/icgnet_world/set_pose ros_gz_interfaces/srv/SetEntityPo
 |------|------|--------|
 | #1 Static hold | Robot spawns in compact-home pose, no oscillation for 10 s | ✅ Confirmed 2026-05-30 |
 | #2 Pre-grasp no abort | STEP 1 completes without `GOAL_TOLERANCE_VIOLATED` | ✅ Confirmed 2026-05-30 |
-| #3 Grasp + lift | Object lifted ≥ 0.25 m by friction (no weld) | ✅ Confirmed 2026-05-30 — 2/2 successful |
-| GSR ≥ 5 runs | Count successes across ≥ 5 single-object attempts | 🔧 In progress — blocked on return-HOME stability |
+| #3 Grasp + lift | Object lifted by friction (no weld) | ✅ Confirmed 2026-05-30 — 2/2 successful |
+| Pick-and-place | Full sequence: grasp + lift + transfer + lower + release + home | ✅ Confirmed 2026-06-01 |
+| GSR ≥ 5 runs | Count successes across ≥ 5 single-object attempts | 🔧 In progress |
