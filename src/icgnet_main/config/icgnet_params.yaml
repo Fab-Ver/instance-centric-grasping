@@ -73,3 +73,14 @@ icgnet_grasp_node:
 
     # Normal estimation maximum neighbours within the search radius.
     pc_normal_max_nn: 30
+
+    # ── Drop-bin exclusion (world frame) ──────────────────────────────────────
+    # Remove points inside the drop bin AABB before ICGNet inference so the bin
+    # walls/floor do not appear as graspable instances. Must match place_x /
+    # place_y / bin_footprint / bin_rim_height in grasp_executor_params.yaml.
+    # z_max is set slightly above rim_height (0.10) to clip rim edge points.
+    exclude_bin: true
+    exclude_bin_x: 0.45
+    exclude_bin_y: -0.50
+    exclude_bin_footprint: 0.30
+    exclude_bin_z_max: 0.12

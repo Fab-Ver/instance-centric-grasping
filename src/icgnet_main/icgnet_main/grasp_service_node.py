@@ -130,6 +130,11 @@ class ICGNetGraspNode(Node):
         self.declare_parameter('pc_std_ratio', 2.0)
         self.declare_parameter('pc_normal_radius_factor', 5.0)
         self.declare_parameter('pc_normal_max_nn', 30)
+        self.declare_parameter('exclude_bin', True)
+        self.declare_parameter('exclude_bin_x', 0.45)
+        self.declare_parameter('exclude_bin_y', -0.50)
+        self.declare_parameter('exclude_bin_footprint', 0.30)
+        self.declare_parameter('exclude_bin_z_max', 0.12)
 
         config_path = os.path.expanduser(
             self.get_parameter('config_path').get_parameter_value().string_value
@@ -156,6 +161,11 @@ class ICGNetGraspNode(Node):
             normal_radius_factor=self.get_parameter('pc_normal_radius_factor').get_parameter_value().double_value,
             normal_max_nn=self.get_parameter('pc_normal_max_nn').get_parameter_value().integer_value,
         )
+        self._exclude_bin = self.get_parameter('exclude_bin').get_parameter_value().bool_value
+        self._bin_x = self.get_parameter('exclude_bin_x').get_parameter_value().double_value
+        self._bin_y = self.get_parameter('exclude_bin_y').get_parameter_value().double_value
+        self._bin_footprint = self.get_parameter('exclude_bin_footprint').get_parameter_value().double_value
+        self._bin_z_max = self.get_parameter('exclude_bin_z_max').get_parameter_value().double_value
 
         # ── Model loading (non-fatal: node stays alive without model for debug) ─
         self.predictor = None
@@ -342,6 +352,20 @@ class ICGNetGraspNode(Node):
 
         points_world = (rot_mat @ raw_points.T).T + translation
         camera_pos_world = translation
+
+        if self._exclude_bin:
+            half = self._bin_footprint / 2.0
+            in_bin = (
+                (points_world[:, 0] >= self._bin_x - half) &
+                (points_world[:, 0] <= self._bin_x + half) &
+                (points_world[:, 1] >= self._bin_y - half) &
+                (points_world[:, 1] <= self._bin_y + half) &
+                (points_world[:, 2] <= self._bin_z_max)
+            )
+            n_removed = int(in_bin.sum())
+            if n_removed > 0:
+                points_world = points_world[~in_bin]
+                self.get_logger().info(f"Bin exclusion: removed {n_removed} points.")
 
         pts, normals = process_point_cloud(
             points_world,
