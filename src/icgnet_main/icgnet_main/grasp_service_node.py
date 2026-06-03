@@ -416,13 +416,21 @@ class ICGNetGraspNode(Node):
         widths       = output.scene_grasp_poses[3].cpu().numpy()
         inst_ids     = output.scene_grasp_poses[4].cpu().numpy()
 
-        # class_predictions has shape (N_points,) — per-point semantic labels.
-        # We index it with inst_id as a best-effort mapping: works when
-        # class_predictions is actually (N_instance_queries,). If the shapes
-        # don't match, we fall back to class 6 (other) and log a warning.
+        # class_predictions must be shaped (N_instances,) when the icg_net patch
+        # (embeddings.semseg) is active.  If it is shaped (N_points,) the patch has NOT
+        # been applied to ~/icg_net — class labels will be silently wrong for every object.
+        # We detect this and warn loudly so the issue is surfaced at first GPU run.
         cls_arr = np.array([], dtype=np.int64)
         try:
             cls_arr = output.class_predictions.cpu().numpy()
+            n_unique_insts = int(np.unique(inst_ids).shape[0])
+            if len(cls_arr) != n_unique_insts and n_unique_insts > 0:
+                self.get_logger().warn(
+                    f"[PATCH CHECK] class_predictions length={len(cls_arr)} != "
+                    f"n_instances={n_unique_insts}. "
+                    "The icg_net patch (embeddings.semseg) may not be applied to ~/icg_net — "
+                    "semantic class labels will be incorrect for multi-object scenes."
+                )
             sem_class_raw = np.array(
                 [int(cls_arr[iid]) if iid < len(cls_arr) else 6 for iid in inst_ids],
                 dtype=np.int32,

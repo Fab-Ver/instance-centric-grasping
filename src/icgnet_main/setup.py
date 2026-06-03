@@ -40,6 +40,7 @@ setup(
             'grasp_service_node = icgnet_main.grasp_service_node:main',
             'test_move_to_pose = icgnet_main.test_move_to_pose:main',
             'spawn_object = icgnet_main.spawn_object:main',
+            'scene_manager = icgnet_main.scene_manager:main',
             'grasp_executor = icgnet_main.grasp_executor:main',
             'save_inference = icgnet_main.save_inference:main',
             'replay_inference_node = icgnet_main.replay_inference_node:main',

@@ -9,6 +9,8 @@ find_package(std_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Grasp.msg"
   "msg/GraspArray.msg"
+  "msg/SceneObject.msg"
+  "msg/SceneManifest.msg"
   "srv/ExecuteGrasp.srv"
   DEPENDENCIES geometry_msgs std_msgs
 )

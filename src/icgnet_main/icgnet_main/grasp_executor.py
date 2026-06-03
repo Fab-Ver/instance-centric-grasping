@@ -25,7 +25,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 from pymoveit2 import MoveIt2, MoveIt2Gripper
 from pymoveit2.robots import panda as robot
 
-from icgnet_msgs.msg import GraspArray
+from icgnet_msgs.msg import GraspArray, SceneManifest
 from icgnet_msgs.srv import ExecuteGrasp
 from icgnet_main.pointcloud_utils import gripper_keypoints_world
 
@@ -122,6 +122,8 @@ class GraspExecutorNode(Node):
         self.declare_parameter('allowed_planning_time', 5.0)
         self.declare_parameter('num_planning_attempts', 10)
         self.declare_parameter('inference_timeout', 120.0)
+        self.declare_parameter('bin_slot_spacing', 0.12)
+        self.declare_parameter('reset_scene_service', '/icgnet/reset_scene')
 
         self._use_collision_scene = self.get_parameter('use_collision_scene').get_parameter_value().bool_value
         self._attach_weight = self.get_parameter('attach_weight').get_parameter_value().double_value
@@ -149,6 +151,8 @@ class GraspExecutorNode(Node):
         self._allowed_planning_time = self.get_parameter('allowed_planning_time').get_parameter_value().double_value
         self._num_planning_attempts = self.get_parameter('num_planning_attempts').get_parameter_value().integer_value
         self._inference_timeout = self.get_parameter('inference_timeout').get_parameter_value().double_value
+        self._bin_slot_spacing = self.get_parameter('bin_slot_spacing').get_parameter_value().double_value
+        self._reset_scene_svc_name = self.get_parameter('reset_scene_service').get_parameter_value().string_value
 
         # Callback groups: MutuallyExclusive for the grasp service and planning-scene clients
         # to prevent deadlocks in MultiThreadedExecutor (ROS2 guideline).
@@ -213,6 +217,9 @@ class GraspExecutorNode(Node):
         self._get_scene_client = self.create_client(
             GetPlanningScene, '/get_planning_scene', callback_group=cb_svc
         )
+        self._reset_scene_client = self.create_client(
+            Trigger, self._reset_scene_svc_name, callback_group=cb_svc
+        )
 
         self._co_pub = self.create_publisher(CollisionObject, '/collision_object', 10)
 
@@ -233,6 +240,31 @@ class GraspExecutorNode(Node):
         # Published lazily on the first execute_grasp call, when move_group is ready.
         self._bin_co_published = False
 
+        # Multi-object sweep state.  Set when a SceneManifest arrives from scene_manager.
+        # While False, every execute_grasp call uses the single-object path (unchanged).
+        self._multi_object = False
+        self._manifest: SceneManifest | None = None
+        self._manifest_lock = Lock()
+
+        # Per-entity pose dict populated from /model_poses for all dynamic entities.
+        # Used by the sweep ground-truth check; the existing _object_pose scalar
+        # (single-object path) is updated in parallel.
+        self._entity_poses: dict[str, Point] = {}
+
+        latched_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+        self.create_subscription(
+            SceneManifest,
+            '/icgnet/scene_manifest',
+            self._manifest_cb,
+            latched_qos,
+            callback_group=cb_sub,
+        )
+
         self.get_logger().info('GraspExecutorNode ready.')
 
     def _grasps_cb(self, msg: GraspArray):
@@ -245,21 +277,38 @@ class GraspExecutorNode(Node):
             f'[SPAWN_POSE] Object spawn pose received: ({msg.x:.3f}, {msg.y:.3f}, {msg.z:.3f})'
         )
 
+    def _manifest_cb(self, msg: SceneManifest):
+        with self._manifest_lock:
+            self._manifest = msg
+            self._multi_object = True
+        n_targets = sum(1 for o in msg.objects if o.entity_name.startswith('target_obj'))
+        n_dist = sum(1 for o in msg.objects if o.entity_name.startswith('distractor'))
+        self.get_logger().info(
+            f'[MANIFEST] Scene manifest received: {len(msg.objects)} objects '
+            f'({n_targets} targets, {n_dist} distractors) — multi-object sweep enabled'
+        )
+
     def _model_poses_cb(self, msg: TFMessage):
-        for transform in msg.transforms:
-            if transform.child_frame_id == self._object_entity_name:
+        _tracked_pt = None
+        _tracked_header = None
+        with self._object_pose_lock:
+            for transform in msg.transforms:
                 t = transform.transform.translation
-                with self._object_pose_lock:
-                    self._object_pose = Point(x=t.x, y=t.y, z=t.z)
-                ps = PoseStamped()
-                ps.header.frame_id = 'world'
-                ps.header.stamp = self.get_clock().now().to_msg()
-                ps.pose.position.x = t.x
-                ps.pose.position.y = t.y
-                ps.pose.position.z = t.z
-                ps.pose.orientation.w = 1.0
-                self._object_pose_pub.publish(ps)
-                return
+                pt = Point(x=t.x, y=t.y, z=t.z)
+                self._entity_poses[transform.child_frame_id] = pt
+                if transform.child_frame_id == self._object_entity_name:
+                    self._object_pose = pt
+                    _tracked_pt = pt
+                    _tracked_header = transform.header
+        if _tracked_pt is not None:
+            ps = PoseStamped()
+            ps.header.frame_id = 'world'
+            ps.header.stamp = self.get_clock().now().to_msg()
+            ps.pose.position.x = _tracked_pt.x
+            ps.pose.position.y = _tracked_pt.y
+            ps.pose.position.z = _tracked_pt.z
+            ps.pose.orientation.w = 1.0
+            self._object_pose_pub.publish(ps)
 
     def _object_in_bin(self) -> bool | None:
         """Return True if the tracked object is inside the drop bin footprint.
@@ -271,6 +320,14 @@ class GraspExecutorNode(Node):
             pose = self._object_pose
         if pose is None:
             return None
+        half = self._bin_footprint / 2.0
+        in_x = abs(pose.x - self._place_x) <= half
+        in_y = abs(pose.y - self._place_y) <= half
+        in_z = pose.z <= self._bin_rim_height + 0.05
+        return in_x and in_y and in_z
+
+    def _pose_in_bin(self, pose: Point) -> bool:
+        """Return True if pose is within the bin footprint (generalised _object_in_bin)."""
         half = self._bin_footprint / 2.0
         in_x = abs(pose.x - self._place_x) <= half
         in_y = abs(pose.y - self._place_y) <= half
@@ -340,7 +397,50 @@ class GraspExecutorNode(Node):
             self._readd_co_to_scene(self._active_co)
             self.get_logger().info(f"[RESET] Re-added CO '{self._active_co_id}' to scene.")
 
+    def _full_reset(self):
+        """Return arm home + restore all scene objects via /icgnet/reset_scene."""
+        # Remove active CO and move arm home before calling the external reset service.
+        if self._use_collision_scene and self._active_co_id is not None:
+            if self._active_co is None:
+                self._active_co = self._fetch_co_from_scene(self._active_co_id)
+            self._remove_co_from_scene(self._active_co_id)
+            time.sleep(0.15)
+
+        self.get_logger().info('[FULL RESET] Opening gripper...')
+        self._gripper.open()
+        self._gripper.wait_until_executed()
+
+        self.get_logger().info('[FULL RESET] Moving arm to home...')
+        self._arm.max_velocity = self._arm_default_velocity
+        self._arm.max_acceleration = self._arm_default_acceleration
+        self._arm.move_to_configuration(
+            joint_positions=HOME_JOINT_POSITIONS, joint_names=robot.joint_names()
+        )
+        ok = self._arm.wait_until_executed()
+        self.get_logger().info(f'[FULL RESET] Arm at home: {ok}')
+
+        self._active_co_id = None
+        self._active_co = None
+
+        if self._reset_scene_client.wait_for_service(timeout_sec=3.0):
+            fut = self._reset_scene_client.call_async(Trigger.Request())
+            if self._wait_for_future(fut, timeout=30.0) and fut.result() is not None:
+                self.get_logger().info(
+                    f'[FULL RESET] Scene reset: {fut.result().message}'
+                )
+            else:
+                self.get_logger().warn('[FULL RESET] Scene reset timed out or failed.')
+        else:
+            self.get_logger().warn(
+                f'[FULL RESET] {self._reset_scene_svc_name} not available — objects not reset.'
+            )
+
     def _execute_grasp_cb(self, req: ExecuteGrasp.Request, res: ExecuteGrasp.Response):
+        with self._manifest_lock:
+            multi = self._multi_object
+        if multi:
+            return self._execute_sweep(req, res)
+
         target = req.target.strip() if req.target else 'any'
         max_attempts = req.max_attempts if req.max_attempts > 0 else self._default_max_attempts
         skip_place = req.skip_place
@@ -449,6 +549,200 @@ class GraspExecutorNode(Node):
         res.success = False
         res.grasps_attempted = len(candidates)
         res.message = f"All {len(candidates)} grasp attempts failed"
+        return res
+
+    def _bin_grid_slots(self, n: int) -> list[tuple[float, float]]:
+        """Return n evenly-spaced drop slots within the bin, centred along the Y axis."""
+        if n <= 1:
+            return [(self._place_x, self._place_y)]
+        y_start = self._place_y - (n - 1) * self._bin_slot_spacing / 2.0
+        return [(self._place_x, y_start + i * self._bin_slot_spacing) for i in range(n)]
+
+    def _execute_sweep(
+        self, req: ExecuteGrasp.Request, res: ExecuteGrasp.Response
+    ) -> ExecuteGrasp.Response:
+        """Multi-object sweep: collect every instance of the target class, then HOME.
+
+        Triggered automatically when a SceneManifest has been received.  Uses a single
+        ICGNet inference pass, groups grasps by instance_id, and attempts each instance
+        in best-score order.  On any single-instance failure the scene is fully reset.
+        On success, verifies all target entities from the manifest are inside the bin.
+        """
+        target = req.target.strip() if req.target else 'any'
+        max_attempts = req.max_attempts if req.max_attempts > 0 else self._default_max_attempts
+        skip_place = req.skip_place
+
+        with self._manifest_lock:
+            manifest = self._manifest
+
+        if manifest is None:
+            res.success = False
+            res.message = "No scene manifest — cannot run multi-object sweep"
+            return res
+
+        self.get_logger().info(
+            f"[SWEEP] target='{target}' max_attempts={max_attempts} skip_place={skip_place}"
+        )
+
+        if not self._bin_co_published:
+            self._add_bin_collision_object()
+            self._bin_co_published = True
+
+        with self._grasps_lock:
+            self._latest_grasps = None
+
+        # Move arm home + open gripper so the full scene is visible to ICGNet.
+        self._reset_scene(teleport_object=False)
+
+        if not self._compute_client.wait_for_service(timeout_sec=5.0):
+            res.success = False
+            res.message = f"Service '{self._compute_client.srv_name}' not available"
+            return res
+
+        future = self._compute_client.call_async(Trigger.Request())
+        if not self._wait_for_future(future, timeout=self._inference_timeout):
+            res.success = False
+            res.message = f"ICGNet inference timed out after {self._inference_timeout:.0f}s"
+            return res
+        if not future.result().success:
+            res.success = False
+            res.message = f"ICGNet inference failed: {future.result().message}"
+            return res
+
+        deadline = time.time() + 5.0
+        grasps = None
+        while time.time() < deadline:
+            with self._grasps_lock:
+                grasps = self._latest_grasps
+            if grasps is not None:
+                break
+            time.sleep(0.1)
+
+        if grasps is None or len(grasps.grasps) == 0:
+            res.success = False
+            res.message = "No grasps received after inference"
+            return res
+
+        candidates = self._filter_grasps(grasps.grasps, target)
+        if not candidates:
+            available = sorted({CLASS_NAMES.get(g.semantic_class, '?') for g in grasps.grasps})
+            if target != 'any':
+                target_class_id = SEMANTIC_CLASSES.get(target)
+                has_target_in_manifest = any(
+                    o.semantic_class == target_class_id and o.entity_name.startswith('target_obj')
+                    for o in manifest.objects
+                ) if target_class_id is not None else False
+                if not has_target_in_manifest:
+                    msg = (
+                        f"No '{target}' objects in scene manifest — "
+                        f"spawn with target_class:={target} first"
+                    )
+                else:
+                    msg = (
+                        f"ICGNet did not detect class '{target}' — "
+                        f"predicted classes: {available}"
+                    )
+            else:
+                msg = f"No grasps after filtering — ICGNet found no objects (predicted: {available})"
+            res.success = False
+            res.message = msg
+            self.get_logger().error(f'[SWEEP] {msg}')
+            return res
+
+        # Group grasps by instance_id; order instances by best score (descending).
+        from collections import defaultdict
+        instance_grasps: dict[int, list] = defaultdict(list)
+        for g in candidates:
+            instance_grasps[g.instance_id].append(g)
+        instances = sorted(
+            instance_grasps.keys(),
+            key=lambda iid: instance_grasps[iid][0].score,
+            reverse=True,
+        )
+        n_instances = len(instances)
+        slots = self._bin_grid_slots(n_instances)
+        self.get_logger().info(
+            f"[SWEEP] {n_instances} instance(s) to collect: {instances}"
+        )
+
+        total_attempted = 0
+        for slot_idx, inst_id in enumerate(instances):
+            inst_candidates = instance_grasps[inst_id][:max_attempts]
+            place_xy = slots[slot_idx]
+            self.get_logger().info(
+                f"[SWEEP] Instance {inst_id}: {len(inst_candidates)} candidate(s), "
+                f"slot=({place_xy[0]:.3f}, {place_xy[1]:.3f})"
+            )
+
+            success = False
+            for attempt_idx, g in enumerate(inst_candidates):
+                if attempt_idx > 0:
+                    # Between retries of the same instance: home + open (no teleport).
+                    self._reset_scene(teleport_object=False)
+
+                total_attempted += 1
+                self.get_logger().info(
+                    f"[SWEEP] inst={inst_id} attempt {attempt_idx + 1}/{len(inst_candidates)} "
+                    f"score={g.score:.3f}"
+                )
+                ok = self._execute_single_grasp(g, skip_place=skip_place, place_xy=place_xy)
+                if ok:
+                    success = True
+                    break
+                self.get_logger().warn(
+                    f"[SWEEP] inst={inst_id} attempt {attempt_idx + 1} failed"
+                )
+
+            if not success:
+                self.get_logger().error(
+                    f"[SWEEP] Failed to grasp instance {inst_id} — triggering full reset"
+                )
+                self._full_reset()
+                self._clear_current_grasp_marker()
+                res.success = False
+                res.grasps_attempted = total_attempted
+                res.message = (
+                    f"Sweep failed: could not grasp instance {inst_id} after "
+                    f"{len(inst_candidates)} attempt(s) — scene reset"
+                )
+                return res
+
+        # Ground-truth check: every target entity from the manifest must be in the bin.
+        if not skip_place:
+            time.sleep(1.0)  # let objects settle after last release
+            target_class_id = SEMANTIC_CLASSES.get(target)
+            target_entity_names = [
+                o.entity_name for o in manifest.objects
+                if o.entity_name.startswith('target_obj') and (
+                    target == 'any' or o.semantic_class == target_class_id
+                )
+            ]
+            with self._object_pose_lock:
+                poses_snapshot = dict(self._entity_poses)
+            missing = [
+                name for name in target_entity_names
+                if name not in poses_snapshot or not self._pose_in_bin(poses_snapshot[name])
+            ]
+            if missing:
+                self.get_logger().error(
+                    f"[SWEEP] Ground-truth check failed — not in bin: {missing}. Full reset."
+                )
+                self._full_reset()
+                self._clear_current_grasp_marker()
+                res.success = False
+                res.grasps_attempted = total_attempted
+                res.message = (
+                    f"Sweep failed: {missing} not confirmed in bin after collection — scene reset"
+                )
+                return res
+
+        self._clear_current_grasp_marker()
+        res.success = True
+        res.grasps_attempted = total_attempted
+        res.message = (
+            f"Sweep complete: collected {n_instances} instance(s) of class '{target}'"
+        )
+        self.get_logger().info(f"[SWEEP] SUCCESS — {res.message}")
         return res
 
     def _filter_grasps(self, grasps, target: str) -> list:
@@ -599,7 +893,9 @@ class GraspExecutorNode(Node):
         self._arm.max_acceleration = self._arm_default_acceleration
         return False
 
-    def _execute_single_grasp(self, g, skip_place: bool = False) -> bool:
+    def _execute_single_grasp(
+        self, g, skip_place: bool = False, place_xy: tuple | None = None
+    ) -> bool:
         # Guarantee default velocity at every attempt start, regardless of prior state.
         self._arm.max_velocity = self._arm_default_velocity
         self._arm.max_acceleration = self._arm_default_acceleration
@@ -797,7 +1093,7 @@ class GraspExecutorNode(Node):
             return self._abort_grasp(target_co_id)
 
         # ── Steps 5–7 + HOME: transport → lower → release → retract → HOME ─────
-        return self._place_object(quat_xyzw, target_co_id, skip_place)
+        return self._place_object(quat_xyzw, target_co_id, skip_place, place_xy=place_xy)
 
 
     def _read_finger_gap(self) -> float:
@@ -867,7 +1163,13 @@ class GraspExecutorNode(Node):
             f"footprint={self._bin_footprint:.2f}m, rim_h={self._bin_rim_height:.2f}m"
         )
 
-    def _place_object(self, quat_xyzw: list, target_co_id: str, skip_place: bool) -> bool:
+    def _place_object(
+        self,
+        quat_xyzw: list,
+        target_co_id: str,
+        skip_place: bool,
+        place_xy: tuple | None = None,
+    ) -> bool:
         """Steps 5–7 + retract + HOME: transport → lower → release → retract → HOME.
 
         Called after Step 4 (Cartesian lift) with the object held. Three-phase deposit:
@@ -882,8 +1184,12 @@ class GraspExecutorNode(Node):
           RETRACT:  Cartesian +Z to place_release_z + safe_retract_height (gripper empty).
           HOME:     Joint-space to HOME_JOINT_POSITIONS at arm_default_velocity.
 
+        place_xy overrides place_x/place_y for multi-object sweep (per-instance bin slot).
         Physical success verified via _object_in_bin() (object pose from /model_poses).
         """
+        place_x = place_xy[0] if place_xy is not None else self._place_x
+        place_y = place_xy[1] if place_xy is not None else self._place_y
+
         if skip_place:
             # Debug path: old behaviour — go HOME while holding the object.
             self._arm.max_velocity = self._arm_default_velocity
@@ -907,10 +1213,9 @@ class GraspExecutorNode(Node):
             self._active_co = None
             return True
 
-        transfer_pos = [self._place_x, self._place_y, self._transport_clear_z]
-        place_release_pos = [self._place_x, self._place_y, self._place_release_z]
-        retract_pos = [self._place_x, self._place_y,
-                       self._place_release_z + self._safe_retract_height]
+        transfer_pos = [place_x, place_y, self._transport_clear_z]
+        place_release_pos = [place_x, place_y, self._place_release_z]
+        retract_pos = [place_x, place_y, self._place_release_z + self._safe_retract_height]
 
         self._arm.max_velocity = self._transport_velocity
         self._arm.max_acceleration = self._transport_acceleration
@@ -1042,7 +1347,7 @@ class GraspExecutorNode(Node):
             self.get_logger().info(
                 f"[PLACE] SUCCESS: object in bin "
                 f"(pose=[{p.x:.3f}, {p.y:.3f}, {p.z:.3f}], "
-                f"bin=[{self._place_x:.3f}, {self._place_y:.3f}] ±{self._bin_footprint/2:.3f})"
+                f"bin=[{place_x:.3f}, {place_y:.3f}] ±{self._bin_footprint/2:.3f})"
             )
             return True
         with self._object_pose_lock:
@@ -1050,7 +1355,7 @@ class GraspExecutorNode(Node):
         self.get_logger().warn(
             f"[PLACE] FAILURE: object NOT in bin after release — "
             f"pose=[{p.x:.3f}, {p.y:.3f}, {p.z:.3f}], "
-            f"bin=[{self._place_x:.3f}, {self._place_y:.3f}] ±{self._bin_footprint/2:.3f}"
+            f"bin=[{place_x:.3f}, {place_y:.3f}] ±{self._bin_footprint/2:.3f}"
         )
         return False
 

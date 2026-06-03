@@ -2,7 +2,7 @@
 
 **Branch:** `main`
 **Stack:** ROS2 Humble + Gazebo Sim Fortress (gz-sim 6, DART physics) + MoveIt2 + gz_ros2_control
-**Last updated:** 2026-06-02
+**Last updated:** 2026-06-03
 
 ---
 
@@ -89,28 +89,38 @@ Wait for:
 - `[move_group]` → `Ready to take commands for planning group arm.`
 - `[gz_ros_bridge]` publishing (camera sensor init takes ~10 s)
 
-### T2 — Spawn object (after T1 ready, ~15 s)
+### T2 — Spawn objects (after T1 ready, ~15 s)
+
+Two modes — pick one:
+
+**A — Single object (legacy, uses spawn_object):**
+
+```bash
+cd ~/instance-centric-grasping
+source /opt/ros/humble/setup.bash && source install/setup.bash
+ros2 run icgnet_main spawn_object --ros-args -p target_class:=can
+# or by exact model: -p target_type:=beer_can
+```
+
+**B — Multi-object scene (uses scene_manager):**
 
 ```bash
 cd ~/instance-centric-grasping
 source /opt/ros/humble/setup.bash && source install/setup.bash
 
-# By semantic class (picks random model from catalog):
-ros2 run icgnet_main spawn_object --ros-args -p target_class:=can
-ros2 run icgnet_main spawn_object --ros-args -p target_class:=bottle
-ros2 run icgnet_main spawn_object --ros-args -p target_class:=box
+# Spawns 2 cans (target_obj_0, target_obj_1) + 2–3 random distractors of OTHER classes.
+# Node stays alive to serve /icgnet/reset_scene.
+ros2 run icgnet_main scene_manager --ros-args \
+  -p target_class:=can -p target_count:=2
 
-# By exact model name:
-ros2 run icgnet_main spawn_object --ros-args -p target_type:=beer_can
-ros2 run icgnet_main spawn_object --ros-args -p target_type:=coke_can
+# Verify manifest published:
+ros2 topic echo /icgnet/scene_manifest --once
 
-# Low-level gz-sim spawn (absolute path):
-PKG=$(ros2 pkg prefix icgnet_main)/share/icgnet_main
-ros2 run ros_gz_sim create \
-  -world icgnet_world -name target_obj \
-  -file $PKG/models/can/beer_can/model.sdf \
-  -x 0.65 -y 0.0 -z 0.05
+# Manual reset (teleports all objects back to spawn pose):
+ros2 service call /icgnet/reset_scene std_srvs/srv/Trigger
 ```
+
+Available classes: `can`, `bottle`, `box`, `mug`, `cylindric`, `ball`, `other`
 
 ### T3 — Perception (choose A or B)
 
@@ -154,14 +164,19 @@ ros2 launch icgnet_main grasp_execution.launch.py
 ### T5 — Triggers (after T1 + T2 + T3 + T4 all up)
 
 ```bash
-# Step 1: run inference (or replay saved data)
+# Single-object (T2-A) or multi-object sweep (T2-B) — same commands:
+
+# Step 1: run inference
 ros2 service call /icgnet/compute_grasps std_srvs/srv/Trigger
 
-# Step 2: execute grasp
+# Step 2: execute
+# Single-object: grasps one object and places it in the bin
+# Multi-object: sweeps all instances of the target class into the bin, distractors stay
+ros2 service call /icgnet/execute_grasp icgnet_msgs/srv/ExecuteGrasp "{target: 'can'}"
 ros2 service call /icgnet/execute_grasp icgnet_msgs/srv/ExecuteGrasp "{target: 'any'}"
 
-# Or target a specific semantic class:
-ros2 service call /icgnet/execute_grasp icgnet_msgs/srv/ExecuteGrasp "{target: 'can'}"
+# Debug (lift only, no place):
+ros2 service call /icgnet/execute_grasp icgnet_msgs/srv/ExecuteGrasp "{target: 'can', skip_place: true}"
 ```
 
 ---
@@ -296,3 +311,4 @@ ros2 service call /world/icgnet_world/set_pose ros_gz_interfaces/srv/SetEntityPo
 | #3 Grasp + lift | Object lifted by friction (no weld) | ✅ Confirmed 2026-05-30 — 2/2 successful |
 | Pick-and-place | Full sequence: grasp + lift + transfer + lower + release + home | ✅ Confirmed 2026-06-01 |
 | GSR ≥ 5 runs | Count successes across ≥ 5 single-object attempts | 🔧 In progress |
+| Multi-object sweep | scene_manager + execute_grasp target class | 🔧 Implemented, not yet tested |

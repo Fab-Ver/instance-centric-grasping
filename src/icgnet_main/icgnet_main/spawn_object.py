@@ -1,45 +1,17 @@
-import glob
 import math
 import os
 import random
-import re
-import subprocess
 import time
 
-import yaml
 import rclpy
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Point
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 
-
-def _half_height_from_sdf(sdf_path: str) -> float:
-    """Return half the vertical extent of the first collision geometry in the SDF, or 0.05."""
-    try:
-        with open(sdf_path) as f:
-            content = f.read()
-        # cylinder: half_height = length/2
-        m = re.search(r'<length>([\d.eE+-]+)</length>', content)
-        if m:
-            return float(m.group(1)) / 2.0
-        # box: half_height = z-dimension / 2
-        m = re.search(r'<size>([\d.eE+-]+)\s+([\d.eE+-]+)\s+([\d.eE+-]+)</size>', content)
-        if m:
-            return float(m.group(3)) / 2.0
-        # sphere: half_height = radius
-        m = re.search(r'<radius>([\d.eE+-]+)</radius>', content)
-        if m:
-            return float(m.group(1))
-    except Exception:
-        pass
-    return 0.05
-
-
-def _load_catalog(models_dir: str) -> dict:
-    catalog_path = os.path.join(models_dir, 'catalog.yaml')
-    with open(catalog_path) as f:
-        return yaml.safe_load(f)
+from icgnet_main.scene_utils import (
+    find_model_sdf, get_random_pose, half_height_from_sdf, load_catalog, spawn_gz_entity,
+)
 
 
 class ObjectSpawner(Node):
@@ -69,7 +41,7 @@ class ObjectSpawner(Node):
 
         pkg_share = get_package_share_directory('icgnet_main')
         self.models_dir = os.path.join(pkg_share, 'models')
-        self.catalog = _load_catalog(self.models_dir)
+        self.catalog = load_catalog(self.models_dir)
 
         # Resolve target model name
         if self.target_type:
@@ -104,16 +76,12 @@ class ObjectSpawner(Node):
         )
 
     def _get_random_pose(self, existing_poses: list) -> tuple[float | None, float | None]:
-        for _ in range(500):
-            x = random.uniform(self._spawn_x_min, self._spawn_x_max)
-            y = random.uniform(self._spawn_y_min, self._spawn_y_max)
-            reach = math.sqrt(x**2 + y**2)
-            if reach > self._spawn_reach_max or reach < self._spawn_reach_min:
-                continue
-            if all(math.sqrt((x - ex)**2 + (y - ey)**2) >= self._spawn_min_dist
-                   for ex, ey in existing_poses):
-                return x, y
-        return None, None
+        return get_random_pose(
+            self._spawn_x_min, self._spawn_x_max,
+            self._spawn_y_min, self._spawn_y_max,
+            self._spawn_reach_min, self._spawn_reach_max,
+            self._spawn_min_dist, existing_poses,
+        )
 
     def spawn_all(self):
         existing_poses = []
@@ -143,52 +111,30 @@ class ObjectSpawner(Node):
 
         yaw = random.uniform(0, 2 * math.pi)
 
-        model_sdf = os.path.join(self.models_dir, '*', model_name, 'model.sdf')
-        matches = glob.glob(model_sdf)
-        if not matches:
-            # fallback: search two levels deep
-            model_sdf_direct = os.path.join(self.models_dir, model_name, 'model.sdf')
-            matches = [model_sdf_direct] if os.path.isfile(model_sdf_direct) else []
-
-        sdf_path = matches[0] if matches else None
-        half_h = _half_height_from_sdf(sdf_path) if sdf_path else 0.05
-        spawn_z = half_h + 0.002
-
-        cmd = [
-            'ros2', 'run', 'ros_gz_sim', 'create',
-            '-world', 'icgnet_world',
-            '-name', entity_name,
-            '-x', f'{x:.3f}', '-y', f'{y:.3f}', '-z', f'{spawn_z:.4f}',
-            '-Y', f'{yaw:.3f}',
-        ]
-
-        if matches:
-            cmd += ['-file', matches[0]]
-        else:
+        sdf_path = find_model_sdf(self.models_dir, model_name)
+        if sdf_path is None:
             self.get_logger().warn(
                 f"Local SDF for '{model_name}' not found — cannot fall back to database in gz-sim."
             )
+            return
+
+        half_h = half_height_from_sdf(sdf_path)
+        spawn_z = half_h + 0.002
 
         self.get_logger().info(f'[{entity_name}] Spawning {model_name} at ({x:.2f}, {y:.2f})...')
 
-        try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-            for line in proc.stdout:
-                self.get_logger().info(f'[{entity_name}] {line.rstrip()}')
-            proc.wait()
-            if proc.returncode == 0:
-                self.get_logger().info(f'[{entity_name}] Spawned successfully.')
-                existing_poses.append((x, y))
-                if entity_name == 'target_obj':
-                    pt = Point(x=float(x), y=float(y), z=float(spawn_z))
-                    self._spawn_pose_pub.publish(pt)
-                    self.get_logger().info(
-                        f'[{entity_name}] Spawn pose published: ({x:.3f}, {y:.3f}, {spawn_z:.4f})'
-                    )
-            else:
-                self.get_logger().error(f'[{entity_name}] Spawn failed (exit {proc.returncode}).')
-        except Exception as e:
-            self.get_logger().error(f'[{entity_name}] Exception: {e}')
+        ok = spawn_gz_entity(entity_name, sdf_path, x, y, spawn_z, yaw, logger=self.get_logger())
+        if ok:
+            self.get_logger().info(f'[{entity_name}] Spawned successfully.')
+            existing_poses.append((x, y))
+            if entity_name == 'target_obj':
+                pt = Point(x=float(x), y=float(y), z=float(spawn_z))
+                self._spawn_pose_pub.publish(pt)
+                self.get_logger().info(
+                    f'[{entity_name}] Spawn pose published: ({x:.3f}, {y:.3f}, {spawn_z:.4f})'
+                )
+        else:
+            self.get_logger().error(f'[{entity_name}] Spawn failed.')
 
 
 def main():

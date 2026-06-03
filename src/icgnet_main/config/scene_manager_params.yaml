@@ -1,0 +1,24 @@
+scene_manager:
+  ros__parameters:
+    # Semantic class to collect.  Must match a key in models/catalog.yaml.
+    # Target objects: spawned as target_obj_0, target_obj_1, ...
+    target_class: 'can'
+
+    # Number of target-class objects to spawn (>=1).
+    target_count: 2
+
+    # Number of distractor objects from OTHER classes (-1 = random choice of 2 or 3).
+    distractor_count: -1
+
+    # Spawn workspace bounds in world frame (m).
+    spawn_x_min: 0.40
+    spawn_x_max: 0.80
+    spawn_y_min: -0.30
+    spawn_y_max: 0.30
+
+    # Radial reach limits from robot base (m).
+    spawn_reach_max: 0.85
+    spawn_reach_min: 0.30
+
+    # Minimum distance between any two spawned objects (m).
+    spawn_min_dist: 0.18

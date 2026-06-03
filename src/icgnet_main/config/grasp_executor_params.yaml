@@ -118,3 +118,9 @@ grasp_executor_node:
     # before starting the retract move. Gives the object sim-time to fall free.
     # 20 states ≈ 0.4s sim at 50Hz; at RTF 0.03 = ~13s wall (acceptable for pick-and-place).
     release_settle_states: 20
+
+    # ── Multi-object sweep (Fase 4) ───────────────────────────────────────────
+    # Lateral Y spacing between per-instance bin slots during a multi-object sweep (m).
+    # With bin_footprint=0.30m, up to 2 objects fit within ±0.12m of centre at this spacing.
+    # Increase to 0.14 only if objects reliably fall within a smaller footprint.
+    bin_slot_spacing: 0.12
