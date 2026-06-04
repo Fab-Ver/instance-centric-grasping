@@ -117,6 +117,7 @@ class GraspExecutorNode(Node):
         self.declare_parameter('max_finger_gap', 0.036)
         self.declare_parameter('executor_threads', 4)
         self.declare_parameter('max_grasp_width', 0.08)
+        self.declare_parameter('pre_pos_z_min', 0.10)
         self.declare_parameter('arm_default_velocity', 0.5)
         self.declare_parameter('arm_default_acceleration', 0.5)
         self.declare_parameter('allowed_planning_time', 5.0)
@@ -146,6 +147,7 @@ class GraspExecutorNode(Node):
         self._min_finger_gap = self.get_parameter('min_finger_gap').get_parameter_value().double_value
         self._max_finger_gap = self.get_parameter('max_finger_gap').get_parameter_value().double_value
         self._max_grasp_width = self.get_parameter('max_grasp_width').get_parameter_value().double_value
+        self._pre_pos_z_min = self.get_parameter('pre_pos_z_min').get_parameter_value().double_value
         self._arm_default_velocity = self.get_parameter('arm_default_velocity').get_parameter_value().double_value
         self._arm_default_acceleration = self.get_parameter('arm_default_acceleration').get_parameter_value().double_value
         self._allowed_planning_time = self.get_parameter('allowed_planning_time').get_parameter_value().double_value
@@ -435,6 +437,70 @@ class GraspExecutorNode(Node):
                 f'[FULL RESET] {self._reset_scene_svc_name} not available — objects not reset.'
             )
 
+    def _partial_reset_for_instance(self, grasp, manifest: SceneManifest) -> None:
+        """Arm home + gripper open + teleport ALL manifest entities not yet in the bin.
+
+        Resets the entire scene (except objects already placed in the bin) so that
+        subsequent retry attempts find objects at the ICGNet-predicted positions.
+        Resetting only the active entity is insufficient: failed approach moves can
+        physically displace distractors and other targets, causing all further attempts
+        to miss even after the active entity is restored.
+        """
+        if self._use_collision_scene and self._active_co_id is not None:
+            if self._active_co is None:
+                self._active_co = self._fetch_co_from_scene(self._active_co_id)
+            self._remove_co_from_scene(self._active_co_id)
+            time.sleep(0.15)
+
+        self.get_logger().info('[PARTIAL RESET] Opening gripper...')
+        self._gripper.open()
+        self._gripper.wait_until_executed()
+
+        self.get_logger().info('[PARTIAL RESET] Moving arm to home...')
+        self._arm.max_velocity = self._arm_default_velocity
+        self._arm.max_acceleration = self._arm_default_acceleration
+        self._arm.move_to_configuration(
+            joint_positions=HOME_JOINT_POSITIONS, joint_names=robot.joint_names()
+        )
+        ok = self._arm.wait_until_executed()
+        self.get_logger().info(f'[PARTIAL RESET] Arm at home: {ok}')
+
+        self._active_co_id = None
+        self._active_co = None
+
+        if not self._set_entity_client.wait_for_service(timeout_sec=2.0):
+            self.get_logger().warn('[PARTIAL RESET] set_pose not available — entities not reset.')
+            return
+
+        with self._object_pose_lock:
+            poses_snapshot = dict(self._entity_poses)
+
+        n_reset = n_skipped = 0
+        for obj in manifest.objects:
+            current = poses_snapshot.get(obj.entity_name)
+            if current is not None and self._pose_in_bin(current):
+                n_skipped += 1
+                continue
+            req = SetEntityPose.Request()
+            req.entity.name = obj.entity_name
+            req.entity.type = Entity.MODEL
+            req.pose = obj.pose
+            fut = self._set_entity_client.call_async(req)
+            if not self._wait_for_future(fut):
+                self.get_logger().warn(
+                    f"[PARTIAL RESET] Teleport timed out for '{obj.entity_name}'"
+                )
+            elif fut.result() and not fut.result().success:
+                self.get_logger().warn(
+                    f"[PARTIAL RESET] Teleport failed for '{obj.entity_name}'"
+                )
+            else:
+                n_reset += 1
+        self.get_logger().info(
+            f'[PARTIAL RESET] Teleported {n_reset} entities to spawn poses '
+            f'({n_skipped} already in bin, skipped).'
+        )
+
     def _execute_grasp_cb(self, req: ExecuteGrasp.Request, res: ExecuteGrasp.Response):
         with self._manifest_lock:
             multi = self._multi_object
@@ -632,10 +698,21 @@ class GraspExecutorNode(Node):
                     o.semantic_class == target_class_id and o.entity_name.startswith('target_obj')
                     for o in manifest.objects
                 ) if target_class_id is not None else False
+                target_seen_in_grasps = (
+                    target_class_id is not None
+                    and any(g.semantic_class == target_class_id for g in grasps.grasps)
+                )
                 if not has_target_in_manifest:
                     msg = (
                         f"No '{target}' objects in scene manifest — "
                         f"spawn with target_class:={target} first"
+                    )
+                elif target_seen_in_grasps:
+                    msg = (
+                        f"All '{target}' grasps rejected by kinematic filters "
+                        f"(pre_pos_z_min={self._pre_pos_z_min:.2f}m) — "
+                        f"ICGNet predicted only horizontal grasps at low z. "
+                        f"Check [FILTER] log for breakdown."
                     )
                 else:
                     msg = (
@@ -665,6 +742,28 @@ class GraspExecutorNode(Node):
             f"[SWEEP] {n_instances} instance(s) to collect: {instances}"
         )
 
+        # Fetch all ICGNet instance COs upfront.  Each attempt runs with only the active
+        # instance CO in the planning scene — other COs block joint-space pre-grasp
+        # planning for far-reaching poses (x > 0.85 m from base).
+        inst_cos: dict[int, CollisionObject | None] = {}
+        if self._use_collision_scene:
+            req = GetPlanningScene.Request()
+            req.components.components = PlanningSceneComponents.WORLD_OBJECT_GEOMETRY
+            fut = self._get_scene_client.call_async(req)
+            if self._wait_for_future(fut):
+                for co in fut.result().scene.world.collision_objects:
+                    if co.id.startswith(self._collision_id_prefix):
+                        try:
+                            iid = int(co.id[len(self._collision_id_prefix):])
+                            inst_cos[iid] = co
+                        except ValueError:
+                            pass
+            for co in inst_cos.values():
+                if co is not None:
+                    self._remove_co_from_scene(co.id)
+            if inst_cos:
+                time.sleep(0.15)
+
         total_attempted = 0
         for slot_idx, inst_id in enumerate(instances):
             inst_candidates = instance_grasps[inst_id][:max_attempts]
@@ -677,8 +776,19 @@ class GraspExecutorNode(Node):
             success = False
             for attempt_idx, g in enumerate(inst_candidates):
                 if attempt_idx > 0:
-                    # Between retries of the same instance: home + open (no teleport).
-                    self._reset_scene(teleport_object=False)
+                    # Partial reset: a failed attempt may have knocked the object away from
+                    # the inference position.  Teleport only this instance's entity back to
+                    # its spawn pose — objects already placed in the bin are not disturbed.
+                    self._partial_reset_for_instance(g, manifest)
+
+                # Restore only the active instance CO so pre-grasp planning is unobstructed.
+                if self._use_collision_scene and inst_cos:
+                    for iid, co in inst_cos.items():
+                        if iid != inst_id and co is not None:
+                            self._remove_co_from_scene(co.id)
+                    active_co = inst_cos.get(inst_id)
+                    if active_co is not None:
+                        self._readd_co_to_scene(active_co)
 
                 total_attempted += 1
                 self.get_logger().info(
@@ -748,7 +858,7 @@ class GraspExecutorNode(Node):
     def _filter_grasps(self, grasps, target: str) -> list:
         filtered = []
         n_total = len(grasps)
-        n_ws = n_width = n_target = 0
+        n_ws = n_width = n_target = n_low = 0
         for g in grasps:
             p = g.pose.position
             if g.width > self._max_grasp_width:
@@ -762,6 +872,17 @@ class GraspExecutorNode(Node):
             if not self._matches_target(g, target):
                 n_target += 1
                 continue
+            # Reject grasps where the pre-approach position would be too low for the arm
+            # to reach from home.  For horizontal approaches (approach_z≈0), pre_pos.z =
+            # grasp.z; near-horizontal grasps at low z hit joint limits and RRTConnect
+            # exhausts the planning timeout.  Top-down grasps add approach_offset along
+            # z so they always clear this threshold.
+            q = g.pose.orientation
+            approach_z = Rotation.from_quat([q.x, q.y, q.z, q.w]).as_matrix()[2, 2]
+            pre_pos_z = p.z - self._approach_offset * approach_z
+            if pre_pos_z < self._pre_pos_z_min:
+                n_low += 1
+                continue
             filtered.append(g)
 
         filtered.sort(key=lambda g: g.score, reverse=True)
@@ -771,7 +892,7 @@ class GraspExecutorNode(Node):
         )
         self.get_logger().info(
             f"[FILTER] total={n_total} → kept={len(filtered)} (scores={score_range}) | "
-            f"rejected: width={n_width} workspace={n_ws} target={n_target}"
+            f"rejected: width={n_width} workspace={n_ws} target={n_target} low_prepos={n_low}"
         )
         return filtered
 
@@ -1258,8 +1379,10 @@ class GraspExecutorNode(Node):
             return self._abort_grasp(target_co_id)
 
         # ── Step 6/7: Cartesian lower → place_release ────────────────────────────
-        # Short descent (transport_clear_z → place_release_z ≈ 19cm). Fraction should be
-        # high: starting from directly above the release point, same orientation.
+        # Threshold 0.3: top-down grasps achieve fraction≈1.0 (full descent);
+        # horizontal grasps hit an IK discontinuity at ≈50% and stop mid-way — still
+        # accepted (0.5 ≥ 0.3) so the object is released ~5 cm higher and falls into bin.
+        # Joint-space alternative causes 30s+ spinning via distant IK branches.
         self.get_logger().info(
             f"[STEP 6/7] LOWER → {[f'{v:.3f}' for v in place_release_pos]}"
         )
@@ -1268,7 +1391,7 @@ class GraspExecutorNode(Node):
             position=place_release_pos, quat_xyzw=quat_xyzw,
             cartesian=True,
             cartesian_max_step=self._cartesian_max_step_approach,
-            cartesian_fraction_threshold=self._cartesian_fraction_threshold,
+            cartesian_fraction_threshold=0.3,
         )
         ok = self._arm.wait_until_executed()
         if not ok:
