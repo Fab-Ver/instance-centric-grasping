@@ -5,9 +5,9 @@ import time
 
 import rclpy
 from ament_index_python.packages import get_package_share_directory
-from geometry_msgs.msg import Point
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+from ros_gz_interfaces.srv import SetEntityPose
 
 from icgnet_msgs.msg import SceneManifest, SceneObject
 from icgnet_main.scene_utils import (
@@ -71,9 +71,10 @@ class ObjectSpawner(Node):
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
         )
-        self._spawn_pose_pub = self.create_publisher(Point, '/icgnet/object_spawn_pose', latched_qos)
         # Viz-only manifest: lets scene_visualizer map entity→model in single/multi-spawn modes.
         # Published on a separate topic so grasp_executor does not treat it as a multi-object sweep.
+        # NOTE: TRANSIENT_LOCAL only survives while this process is alive — scene_visualizer is
+        # always-on (world.launch.py) so it receives the manifest live before this node exits.
         self._manifest_viz_pub = self.create_publisher(SceneManifest, '/icgnet/scene_manifest_viz', latched_qos)
         self._spawned_entries: list[dict] = []
 
@@ -94,8 +95,11 @@ class ObjectSpawner(Node):
 
     def spawn_all(self):
         existing_poses = []
-        self.get_logger().info('Waiting 5s for Gazebo...')
-        time.sleep(5.0)
+        # The bridged set_pose service appearing means gz-sim + ros_gz_bridge are up.
+        self.get_logger().info('Waiting for Gazebo bridge (/world/icgnet_world/set_pose)...')
+        bridge_probe = self.create_client(SetEntityPose, '/world/icgnet_world/set_pose')
+        if not bridge_probe.wait_for_service(timeout_sec=30.0):
+            self.get_logger().warn('Gazebo bridge not detected after 30s — attempting spawn anyway.')
 
         self._spawn_one(self._resolved_target, 'target_obj', existing_poses, fixed_pos=None)
 
@@ -139,15 +143,9 @@ class ObjectSpawner(Node):
             self._spawned_entries.append({
                 'entity_name': entity_name,
                 'model_name': model_name,
-                'semantic_class': self._model_to_class.get(model_name, 0),
+                'semantic_class': self._model_to_class.get(model_name, 6),
                 'x': x, 'y': y, 'z': spawn_z, 'yaw': yaw,
             })
-            if entity_name == 'target_obj':
-                pt = Point(x=float(x), y=float(y), z=float(spawn_z))
-                self._spawn_pose_pub.publish(pt)
-                self.get_logger().info(
-                    f'[{entity_name}] Spawn pose published: ({x:.3f}, {y:.3f}, {spawn_z:.4f})'
-                )
         else:
             self.get_logger().error(f'[{entity_name}] Spawn failed.')
 

@@ -180,8 +180,11 @@ class ICGNetGraspNode(Node):
                 self.get_logger().error(f"Failed to load ICGNet: {e}")
 
         # ── TF ───────────────────────────────────────────────────────────────
+        # spin_thread=True: the node spins single-threaded and inference blocks the
+        # executor for 20-60s — without a dedicated TF thread the buffer would never
+        # update during a service call and the lookup timeout would be useless.
         self.tf_buffer = tf2_ros.Buffer()
-        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self, spin_thread=True)
 
         # ── Pointcloud subscriber (BEST_EFFORT — required for Gazebo sensor QoS) ─
         qos_sensor = QoSProfile(

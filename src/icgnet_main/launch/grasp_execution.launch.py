@@ -7,9 +7,9 @@ Requires world.launch.py and icgnet_inference.launch.py running in other termina
 Usage:
     ros2 launch icgnet_main grasp_execution.launch.py
 
-Then trigger a grasp:
-    ros2 service call /icgnet/execute_grasp icgnet_msgs/srv/ExecuteGrasp "{target: 'any'}"
-    ros2 service call /icgnet/execute_grasp icgnet_msgs/srv/ExecuteGrasp "{target: 'can'}"
+Then send a grasp goal (action; -f streams feedback):
+    ros2 action send_goal -f /icgnet/execute_grasp icgnet_msgs/action/ExecuteGrasp "{target: 'any'}"
+    ros2 action send_goal -f /icgnet/execute_grasp icgnet_msgs/action/ExecuteGrasp "{target: 'can'}"
 """
 import os
 from ament_index_python.packages import get_package_share_directory

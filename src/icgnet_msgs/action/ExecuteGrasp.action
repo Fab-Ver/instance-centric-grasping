@@ -6,3 +6,7 @@ bool skip_place        # if true: grasp+lift+HOME only (debug); default false = 
 bool success
 int32 grasps_attempted
 string message
+---
+string current_step    # e.g. 'inference', 'attempt', 'place', 'reset'
+int32 attempt          # 1-based attempt counter within the current goal
+int32 total_candidates # number of grasp candidates for the current object

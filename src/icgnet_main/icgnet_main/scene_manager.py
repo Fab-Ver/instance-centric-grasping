@@ -105,8 +105,10 @@ class SceneManagerNode(Node):
         existing_poses: list[tuple[float, float]] = []
         registry: list[dict] = []
 
-        self.get_logger().info('Waiting 5 s for Gazebo to be ready...')
-        time.sleep(5.0)
+        # The bridged set_pose service appearing means gz-sim + ros_gz_bridge are up.
+        self.get_logger().info('Waiting for Gazebo bridge (/world/icgnet_world/set_pose)...')
+        if not self._set_entity_client.wait_for_service(timeout_sec=30.0):
+            self.get_logger().warn('Gazebo bridge not detected after 30s — attempting spawn anyway.')
 
         # ── Target objects ────────────────────────────────────────────────────
         target_models = self._catalog[self._target_class]['models']
@@ -227,13 +229,21 @@ class SceneManagerNode(Node):
             manifest.objects.append(obj)
         self._manifest_pub.publish(manifest)
 
-    def _wait_for_future(self, future, timeout: float = 5.0) -> bool:
+    def _call_service(self, client, request, timeout: float = 5.0):
+        """call_async + wall-clock wait. Returns the response, or None on timeout
+        or if the call raised (e.g. server died mid-call)."""
+        future = client.call_async(request)
         deadline = time.time() + timeout
         while not future.done():
             if time.time() > deadline:
-                return False
+                future.cancel()
+                return None
             time.sleep(0.02)
-        return True
+        try:
+            return future.result()
+        except Exception as e:
+            self.get_logger().error(f"Service call to '{client.srv_name}' failed: {e}")
+            return None
 
     def _reset_scene_cb(self, req: Trigger.Request, res: Trigger.Response):
         """Teleport every spawned entity back to its original pose."""
@@ -262,14 +272,14 @@ class SceneManagerNode(Node):
             set_req.pose.orientation.z = math.sin(half_yaw)
             set_req.pose.orientation.w = math.cos(half_yaw)
 
-            fut = self._set_entity_client.call_async(set_req)
-            if not self._wait_for_future(fut, timeout=5.0):
+            res = self._call_service(self._set_entity_client, set_req, timeout=5.0)
+            if res is None:
                 failed.append(entry['entity_name'])
                 self.get_logger().warn(
                     f"[RESET] SetEntityPose timed out for '{entry['entity_name']}'"
                 )
                 continue
-            if not fut.result().success:
+            if not res.success:
                 failed.append(entry['entity_name'])
                 self.get_logger().warn(
                     f"[RESET] SetEntityPose failed for '{entry['entity_name']}'"

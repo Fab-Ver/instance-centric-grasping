@@ -8,6 +8,24 @@ import subprocess
 
 import yaml
 
+# ── Drop-bin geometry — single source of truth for Python nodes ──────────────
+# Mirrors the static drop_bin model in worlds/icgnet_world.sdf.  The runtime-
+# configurable counterparts (place_x/place_y/bin_footprint/bin_rim_height in
+# grasp_executor_params.yaml and exclude_bin_* in icgnet_params.yaml) default to
+# these values and must stay consistent with the SDF.
+BIN_CENTER_X, BIN_CENTER_Y, BIN_CENTER_Z = 0.45, -0.50, 0.0
+BIN_FOOTPRINT = 0.30
+BIN_RIM_HEIGHT = 0.10
+BIN_COLOR_RGBA = (0.9, 0.5, 0.0, 0.7)
+# (link_offset_xyz, cube_scale_xyz) for floor and four walls.
+BIN_PARTS = [
+    ((0.0,    0.0,    0.0025), (0.30, 0.30, 0.005)),   # floor
+    ((0.14,   0.0,    0.05),   (0.02, 0.30, 0.10)),    # wall +X
+    ((-0.14,  0.0,    0.05),   (0.02, 0.30, 0.10)),    # wall -X
+    ((0.0,    0.14,   0.05),   (0.26, 0.02, 0.10)),    # wall +Y
+    ((0.0,   -0.14,   0.05),   (0.26, 0.02, 0.10)),    # wall -Y
+]
+
 
 def half_height_from_sdf(sdf_path: str) -> float:
     """Return half the vertical extent of the first collision geometry in the SDF, or 0.05."""
@@ -166,6 +184,7 @@ def spawn_gz_entity(
     yaw: float,
     world: str = 'icgnet_world',
     logger=None,
+    timeout: float = 30.0,
 ) -> bool:
     """Spawn a model in Gazebo via ros_gz_sim create. Returns True on success."""
     cmd = [
@@ -180,10 +199,16 @@ def spawn_gz_entity(
     ]
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        for line in proc.stdout:
+        try:
+            out, _ = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
             if logger:
+                logger.error(f'[{entity_name}] Spawn timed out after {timeout:.0f}s — gz-sim not responding?')
+            return False
+        if logger and out:
+            for line in out.splitlines():
                 logger.info(f'[{entity_name}] {line.rstrip()}')
-        proc.wait()
         return proc.returncode == 0
     except Exception as e:
         if logger:

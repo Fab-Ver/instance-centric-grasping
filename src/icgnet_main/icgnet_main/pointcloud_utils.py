@@ -54,10 +54,11 @@ def pointcloud2_to_numpy(msg) -> np.ndarray:
 
     try:
         from sensor_msgs_py import point_cloud2
-        points_list = []
-        for p in point_cloud2.read_points(msg, field_names=("x", "y", "z"), skip_nans=True):
-            points_list.append([p[0], p[1], p[2]])
-        return np.array(points_list, dtype=np.float32)
+        # Vectorised conversion — a per-point Python loop costs seconds on 640x480 clouds.
+        pts = point_cloud2.read_points_numpy(
+            msg, field_names=("x", "y", "z"), skip_nans=True
+        )
+        return pts.astype(np.float32, copy=False)
     except ImportError:
         # Raw fallback — assumes first 3 fields are x, y, z as float32
         data = np.frombuffer(msg.data, dtype=np.float32)

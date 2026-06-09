@@ -11,7 +11,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/GraspArray.msg"
   "msg/SceneObject.msg"
   "msg/SceneManifest.msg"
-  "srv/ExecuteGrasp.srv"
+  "action/ExecuteGrasp.action"
   DEPENDENCIES geometry_msgs std_msgs
 )
 

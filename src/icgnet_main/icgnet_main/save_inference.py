@@ -48,12 +48,14 @@ class SaveInferenceNode(Node):
         )
 
     def _grasps_cb(self, msg: GraspArray):
-        if self._grasps is None or self._saved:
-            self._grasps = msg
-            self._collision_objects.clear()
-            self._received_grasps_at = time.time()
-            self._saved = False
-            self.get_logger().info(f'Received {len(msg.grasps)} grasps. Collecting collision objects...')
+        # Every GraspArray starts a fresh collection: a second inference arriving
+        # within the collect window must not be silently dropped or mixed with the
+        # collision objects of the previous run.
+        self._grasps = msg
+        self._collision_objects.clear()
+        self._received_grasps_at = time.time()
+        self._saved = False
+        self.get_logger().info(f'Received {len(msg.grasps)} grasps. Collecting collision objects...')
 
     def _co_cb(self, msg: CollisionObject):
         if msg.operation == CollisionObject.ADD:

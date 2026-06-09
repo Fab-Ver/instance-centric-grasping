@@ -2,7 +2,7 @@
 
 **Branch:** `main`
 **Stack:** ROS2 Humble + Gazebo Sim Fortress (gz-sim 6, DART physics) + MoveIt2 + gz_ros2_control
-**Last updated:** 2026-06-09
+**Last updated:** 2026-06-09 (post audit-refactor: `/icgnet/execute_grasp` is now an **action**)
 
 ---
 
@@ -113,9 +113,9 @@ cd ~/instance-centric-grasping
 source /opt/ros/humble/setup.bash && source install/setup.bash
 
 # Spawns 2 cans (target_obj_0, target_obj_1) + 2–3 random distractors of OTHER classes.
-# Node stays alive to serve /icgnet/reset_scene.
-ros2 run icgnet_main scene_manager --ros-args \
-  -p target_class:=can -p target_count:=2
+# Node stays alive to serve /icgnet/reset_scene. Loads scene_manager_params.yaml.
+ros2 launch icgnet_main scene_manager.launch.py target_class:=can target_count:=2
+# (equivalent: ros2 run icgnet_main scene_manager --ros-args -p target_class:=can -p target_count:=2)
 
 # Verify manifest published:
 ros2 topic echo /icgnet/scene_manifest --once
@@ -143,10 +143,10 @@ ros2 launch icgnet_main icgnet_inference.launch.py
 > Prerequisite: generate `~/icgnet_inference_data/` first on a GPU machine (see Save Inference section).
 
 > **Object spawn coordinates for replay**: the bundled inference data was saved with the object at
-> `x=0.65, y=0.0, z=0.05`. The object **must** be spawned at exactly those coordinates in T2,
-> otherwise the saved grasp poses will not match the object's actual position. Between failed
-> attempts the grasp executor teleports the object back to these coordinates automatically
-> (configured via `object_init_x/y/z` in `grasp_executor_params.yaml`).
+> `x=0.65, y=0.0, z=0.05`. The replay node spawns the object at those saved coordinates on the
+> first trigger. Between failed attempts the grasp executor teleports the object back to the pose
+> it had when the (replayed) inference was triggered — captured automatically from `/model_poses`,
+> no configuration needed.
 
 ```bash
 cd ~/instance-centric-grasping
@@ -170,17 +170,19 @@ ros2 launch icgnet_main grasp_execution.launch.py
 ```bash
 # Single-object (T2-A) or multi-object sweep (T2-B) — same commands:
 
-# Step 1: run inference
+# Step 1: run inference (optional — execute_grasp triggers it internally anyway)
 ros2 service call /icgnet/compute_grasps std_srvs/srv/Trigger
 
-# Step 2: execute
+# Step 2: execute — ACTION (since 2026-06-09). -f streams feedback (step/attempt);
+# Ctrl+C sends a cancel (handled at attempt/round boundaries: gripper open + HOME).
 # Single-object: grasps one object and places it in the bin
-# Multi-object: sweeps all instances of the target class into the bin, distractors stay
-ros2 service call /icgnet/execute_grasp icgnet_msgs/srv/ExecuteGrasp "{target: 'can'}"
-ros2 service call /icgnet/execute_grasp icgnet_msgs/srv/ExecuteGrasp "{target: 'any'}"
+# Multi-object: sweeps all instances of the target class into the bin (one inference
+#               per object), distractors stay
+ros2 action send_goal -f /icgnet/execute_grasp icgnet_msgs/action/ExecuteGrasp "{target: 'can'}"
+ros2 action send_goal -f /icgnet/execute_grasp icgnet_msgs/action/ExecuteGrasp "{target: 'any'}"
 
 # Debug (lift only, no place):
-ros2 service call /icgnet/execute_grasp icgnet_msgs/srv/ExecuteGrasp "{target: 'can', skip_place: true}"
+ros2 action send_goal -f /icgnet/execute_grasp icgnet_msgs/action/ExecuteGrasp "{target: 'can', skip_place: true}"
 ```
 
 ---
@@ -280,7 +282,6 @@ ros2 service call /world/icgnet_world/set_pose ros_gz_interfaces/srv/SetEntityPo
 ## Expected Grasp Log Sequence
 
 ```
-[SPAWN_POSE] Object spawn pose received: (0.65, 0.00, 0.052)
 [RECON]   inst_0 → class=can (id=2)
 [INSTANCES] 1 instance(s): inst_0=can(id=2, 353g) | total_grasps=353
 [SCORES]  top-10: [0.807, 0.806, ...] | min=0.300 max=0.807 mean=0.559 | >0.3: 353 >0.5: 186 >0.7: 0
@@ -299,7 +300,11 @@ ros2 service call /world/icgnet_world/set_pose ros_gz_interfaces/srv/SetEntityPo
 [STEP 7/7] OPEN GRIPPER + settle + retract + HOME
 [STEP 8]   Detached and removed 'icgnet_inst_0'
 [SUCCESS]  Grasp completed on attempt 1/5
+[GOAL]     Succeeded: Grasp succeeded on attempt 1
 ```
+
+On a failed attempt the executor teleports the object back to the **inference pose**
+(position + orientation captured from `/model_poses` when inference ran) before retrying.
 
 ---
 
@@ -316,8 +321,10 @@ ros2 service call /world/icgnet_world/set_pose ros_gz_interfaces/srv/SetEntityPo
 | Camera pointcloud silent after 30 s | Sensor thread still initialising | Wait; bridge auto-reconnects |
 | `list_controllers` shows 0 | Controllers not yet spawned (~8 s after gz-sim start) | Wait and retry |
 | Spawn error "entity already exists" | Previous `target_obj` still in world | Delete first (see Object Management) |
-| Lift fails, object drops | Friction-based lift; DART contact insufficient | Check finger gap > 5 mm; fallback: weld at tag `weld-fallback b374f0e` |
+| Lift fails, object drops | Friction-based lift; DART contact insufficient (fingers mu=1.0, objects mu=0.5) | Check finger gap > 5 mm; fallback: weld at tag `weld-fallback b374f0e` |
 | Return HOME after lift unstable | MoveIt2 planning from post-grasp config occasionally fails | Open issue — observed 2026-05-30; under investigation |
+| `[MOTION] Execution exceeded 300s` | Controller/move_group hung (or RTF extremely low) | Goal is cancelled + flags reset automatically; raise `motion_timeout` in YAML if RTF < 0.01 |
+| Action goal rejected with "Another grasp goal is already executing" | A previous goal is still running | Wait for it or cancel it (`Ctrl+C` on the `send_goal -f` terminal) |
 
 ---
 
@@ -328,6 +335,7 @@ ros2 service call /world/icgnet_world/set_pose ros_gz_interfaces/srv/SetEntityPo
 | #1 Static hold | Robot spawns in compact-home pose, no oscillation for 10 s | ✅ Confirmed 2026-05-30 |
 | #2 Pre-grasp no abort | STEP 1 completes without `GOAL_TOLERANCE_VIOLATED` | ✅ Confirmed 2026-05-30 |
 | #3 Grasp + lift | Object lifted by friction (no weld) | ✅ Confirmed 2026-05-30 — 2/2 successful |
-| Pick-and-place | Full sequence: grasp + lift + transfer + lower + release + home | ✅ Confirmed 2026-06-01 |
+| Pick-and-place | Full sequence: grasp + lift + transfer + lower + release + home | ✅ Confirmed 2026-06-01 (pre audit-refactor) |
+| Post-refactor re-test | Single-object pick-and-place via the new action interface | 🔧 Pending (build + smoke test OK) |
 | GSR ≥ 5 runs | Count successes across ≥ 5 single-object attempts | 🔧 In progress |
-| Multi-object sweep | scene_manager + execute_grasp target class | 🔧 Implemented, not yet tested |
+| Multi-object sweep | scene_manager + execute_grasp target class (re-inference per round) | 🔧 Re-architected 2026-06-09, not yet tested |

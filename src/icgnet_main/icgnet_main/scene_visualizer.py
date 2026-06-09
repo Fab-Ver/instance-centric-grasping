@@ -24,20 +24,11 @@ from tf2_ros import TransformBroadcaster
 from visualization_msgs.msg import Marker, MarkerArray
 
 from icgnet_msgs.msg import SceneManifest
-from icgnet_main.scene_utils import find_model_sdf, visual_geometry_from_sdf
+from icgnet_main.scene_utils import (
+    BIN_CENTER_X, BIN_CENTER_Y, BIN_CENTER_Z, BIN_COLOR_RGBA, BIN_PARTS,
+    find_model_sdf, visual_geometry_from_sdf,
+)
 
-
-# Bin geometry from worlds/icgnet_world.sdf drop_bin (static, pose 0.45 -0.50 0, orange).
-_BIN_X, _BIN_Y, _BIN_Z = 0.45, -0.50, 0.0
-_BIN_R, _BIN_G, _BIN_B, _BIN_A = 0.9, 0.5, 0.0, 0.7
-# (link_offset_xyz, cube_scale_xyz) for floor and four walls.
-_BIN_PARTS = [
-    ((0.0,    0.0,    0.0025), (0.30, 0.30, 0.005)),   # floor
-    ((0.14,   0.0,    0.05),   (0.02, 0.30, 0.10)),    # wall +X
-    ((-0.14,  0.0,    0.05),   (0.02, 0.30, 0.10)),    # wall -X
-    ((0.0,    0.14,   0.05),   (0.26, 0.02, 0.10)),    # wall +Y
-    ((0.0,   -0.14,   0.05),   (0.26, 0.02, 0.10)),    # wall -Y
-]
 _BIN_ID_BASE = 900  # marker ids 900-904 (above all entity ids)
 
 # Marker-definition republish rate. Motion is carried by TF + frame_locked, NOT by
@@ -242,7 +233,7 @@ class SceneVisualizerNode(Node):
 
     def _build_bin_markers(self, stamp) -> list[Marker]:
         markers = []
-        for i, (offset, scale) in enumerate(_BIN_PARTS):
+        for i, (offset, scale) in enumerate(BIN_PARTS):
             m = Marker()
             m.header.frame_id = 'world'
             m.header.stamp = stamp
@@ -252,17 +243,17 @@ class SceneVisualizerNode(Node):
             m.action = Marker.ADD
             m.lifetime.sec = 0
             m.lifetime.nanosec = 0
-            m.pose.position.x = _BIN_X + offset[0]
-            m.pose.position.y = _BIN_Y + offset[1]
-            m.pose.position.z = _BIN_Z + offset[2]
+            m.pose.position.x = BIN_CENTER_X + offset[0]
+            m.pose.position.y = BIN_CENTER_Y + offset[1]
+            m.pose.position.z = BIN_CENTER_Z + offset[2]
             m.pose.orientation.w = 1.0
             m.scale.x = float(scale[0])
             m.scale.y = float(scale[1])
             m.scale.z = float(scale[2])
-            m.color.r = _BIN_R
-            m.color.g = _BIN_G
-            m.color.b = _BIN_B
-            m.color.a = _BIN_A
+            m.color.r = BIN_COLOR_RGBA[0]
+            m.color.g = BIN_COLOR_RGBA[1]
+            m.color.b = BIN_COLOR_RGBA[2]
+            m.color.a = BIN_COLOR_RGBA[3]
             markers.append(m)
         return markers
 

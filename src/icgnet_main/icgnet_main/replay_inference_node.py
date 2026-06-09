@@ -15,7 +15,7 @@ from moveit_msgs.msg import CollisionObject
 from icgnet_msgs.msg import GraspArray, SceneManifest, SceneObject
 from std_srvs.srv import Trigger
 
-from icgnet_main.scene_utils import find_model_sdf
+from icgnet_main.scene_utils import find_model_sdf, load_catalog
 
 
 class ReplayInferenceNode(Node):
@@ -45,6 +45,13 @@ class ReplayInferenceNode(Node):
 
         pkg_share = get_package_share_directory('icgnet_main')
         self._models_dir = os.path.join(pkg_share, 'models')
+        # model_name → semantic class id, for the viz manifest (fallback 6 = 'other').
+        catalog = load_catalog(self._models_dir)
+        self._model_to_class: dict[str, int] = {
+            m: cls_data['class_id']
+            for cls_data in catalog.values()
+            for m in cls_data['models']
+        }
 
         self._grasps_pub = self.create_publisher(GraspArray, '/icgnet/grasps_rich', 10)
         self._co_pub = self.create_publisher(CollisionObject, '/collision_object', qos_reliable)
@@ -156,7 +163,7 @@ class ReplayInferenceNode(Node):
         obj = SceneObject()
         obj.entity_name = entity_name
         obj.model_name = model_name
-        obj.semantic_class = 0
+        obj.semantic_class = self._model_to_class.get(model_name, 6)
         obj.pose.position.x = x
         obj.pose.position.y = y
         obj.pose.position.z = z

@@ -73,8 +73,10 @@ icgnet_grasp_node:
     # ── Drop-bin exclusion (world frame) ──────────────────────────────────────
     # Remove points inside the drop bin AABB before ICGNet inference so the bin
     # walls/floor do not appear as graspable instances. Must match place_x /
-    # place_y / bin_footprint / bin_rim_height in grasp_executor_params.yaml.
-    # z_max is set slightly above rim_height (0.10) to clip rim edge points.
+    # place_y / bin_footprint / bin_rim_height in grasp_executor_params.yaml
+    # (single source of truth: scene_utils.py BIN_* constants + icgnet_world.sdf).
+    # footprint is INTENTIONALLY 0.36 = bin 0.30 + 3cm clip margin per side, so
+    # rim edge points are removed too; z_max slightly above rim_height (0.10).
     exclude_bin: true
     exclude_bin_x: 0.45
     exclude_bin_y: -0.50

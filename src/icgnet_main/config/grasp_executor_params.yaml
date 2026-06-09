@@ -20,9 +20,10 @@ grasp_executor_node:
     workspace_z_min: 0.01
     workspace_z_max: 0.60
     object_entity_name: 'target_obj'
-    object_init_x: 0.65
-    object_init_y: 0.0
-    object_init_z: 0.05
+
+    # Minimum pre-grasp z (m): grasps whose pre-approach position would be lower
+    # are rejected (near-horizontal grasps at low z hit joint limits from home).
+    pre_pos_z_min: 0.10
 
     # ── Collision scene integration ───────────────────────────────────────────
     # Master switch. Set false to disable all collision-scene logic (debug only).
@@ -76,6 +77,11 @@ grasp_executor_node:
     # ICGNet with return_meshes=True (marching cubes) on a small GPU takes 20–60 s.
     inference_timeout: 120.0
 
+    # Max wall-clock seconds for a single MoveIt2 motion execution before the goal
+    # is cancelled (hung controller guard). Must stay generous: at RTF≈0.03 a few
+    # seconds of sim trajectory take minutes of wall time.
+    motion_timeout: 300.0
+
     # ── Pick-and-place (Fase 5) ──────────────────────────────────────────────
     # Drop bin centre in world frame (must match drop_bin pose in icgnet_world.sdf).
     # y=-0.50: outside camera FOV (camera covers y ∈ [-0.35,0.35]) → no cloud pollution.
@@ -85,9 +91,6 @@ grasp_executor_node:
     # z of TCP at release — must clear the bin rim (bin_rim_height=0.10).
     # 0.26m leaves 16cm above the rim; works for can/box without object-specific tuning.
     place_release_z: 0.26
-
-    # Cartesian descent from place_pre to place_release (m above place_release_z).
-    place_pre_offset: 0.15
 
     # Bin geometry for MoveIt collision object (solid box up to the rim).
     bin_footprint: 0.30    # outer side length (m) — matches drop_bin in world.sdf
