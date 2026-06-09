@@ -201,34 +201,6 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /end_effector_target_pose
       Value: true
-    - Class: rviz_default_plugins/Image
-      Enabled: true
-      Max Value: 1
-      Median window: 5
-      Min Value: 0
-      Name: Image
-      Normalize Range: true
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /camera1/image_raw
-      Value: true
-    - Class: rviz_default_plugins/Image
-      Enabled: true
-      Max Value: 1
-      Median window: 5
-      Min Value: 0
-      Name: Image
-      Normalize Range: true
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /camera1/depth/image_raw
-      Value: true
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
@@ -241,7 +213,7 @@ Visualization Manager:
       Color: 255; 255; 255
       Color Transformer: RGB8
       Decay Time: 0
-      Enabled: true
+      Enabled: false
       Invert Rainbow: false
       Max Color: 255; 255; 255
       Max Intensity: 4096
@@ -275,7 +247,7 @@ Visualization Manager:
       Color: 255; 200; 0
       Color Transformer: FlatColor
       Decay Time: 0
-      Enabled: true
+      Enabled: false
       Invert Rainbow: false
       Max Color: 255; 255; 255
       Max Intensity: 4096
@@ -309,23 +281,17 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /icgnet/current_grasp_marker
       Value: true
-    - Class: rviz_default_plugins/Pose
+    - Class: rviz_default_plugins/MarkerArray
       Enabled: true
-      Name: Object Pose (gz-sim)
-      Arrow Length: 0.12
-      Head Length: 0.04
-      Head Radius: 0.02
-      Shaft Length: 0.08
-      Shaft Radius: 0.01
-      Color: 255; 165; 0
-      Alpha: 1.0
-      Shape: Arrow
+      Name: Scene Meshes (gz twin)
+      Namespaces:
+        scene_meshes: true
       Topic:
         Depth: 5
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /icgnet/object_pose
+        Value: /icgnet/scene_meshes
       Value: true
     - Class: rviz_default_plugins/MarkerArray
       Enabled: false

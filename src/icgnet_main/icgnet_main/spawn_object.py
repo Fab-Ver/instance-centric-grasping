@@ -9,6 +9,7 @@ from geometry_msgs.msg import Point
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 
+from icgnet_msgs.msg import SceneManifest, SceneObject
 from icgnet_main.scene_utils import (
     find_model_sdf, get_random_pose, half_height_from_sdf, load_catalog, spawn_gz_entity,
 )
@@ -64,16 +65,24 @@ class ObjectSpawner(Node):
         self.get_logger().info(f'Total objects: {self.num_objects}')
         self.get_logger().info('==========================================')
 
-        self._spawn_pose_pub = self.create_publisher(
-            Point,
-            '/icgnet/object_spawn_pose',
-            QoSProfile(
-                reliability=ReliabilityPolicy.RELIABLE,
-                durability=DurabilityPolicy.TRANSIENT_LOCAL,
-                history=HistoryPolicy.KEEP_LAST,
-                depth=1,
-            ),
+        latched_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
         )
+        self._spawn_pose_pub = self.create_publisher(Point, '/icgnet/object_spawn_pose', latched_qos)
+        # Viz-only manifest: lets scene_visualizer map entity→model in single/multi-spawn modes.
+        # Published on a separate topic so grasp_executor does not treat it as a multi-object sweep.
+        self._manifest_viz_pub = self.create_publisher(SceneManifest, '/icgnet/scene_manifest_viz', latched_qos)
+        self._spawned_entries: list[dict] = []
+
+        # Build reverse mapping model_name → semantic class id for manifest population.
+        self._model_to_class: dict[str, int] = {
+            m: cls_data['class_id']
+            for cls_data in self.catalog.values()
+            for m in cls_data['models']
+        }
 
     def _get_random_pose(self, existing_poses: list) -> tuple[float | None, float | None]:
         return get_random_pose(
@@ -127,6 +136,12 @@ class ObjectSpawner(Node):
         if ok:
             self.get_logger().info(f'[{entity_name}] Spawned successfully.')
             existing_poses.append((x, y))
+            self._spawned_entries.append({
+                'entity_name': entity_name,
+                'model_name': model_name,
+                'semantic_class': self._model_to_class.get(model_name, 0),
+                'x': x, 'y': y, 'z': spawn_z, 'yaw': yaw,
+            })
             if entity_name == 'target_obj':
                 pt = Point(x=float(x), y=float(y), z=float(spawn_z))
                 self._spawn_pose_pub.publish(pt)
@@ -137,11 +152,36 @@ class ObjectSpawner(Node):
             self.get_logger().error(f'[{entity_name}] Spawn failed.')
 
 
+    def _publish_manifest_viz(self):
+        """Publish a latched SceneManifest for scene_visualizer covering all spawned entities."""
+        if not self._spawned_entries:
+            return
+        manifest = SceneManifest()
+        manifest.header.frame_id = 'world'
+        for entry in self._spawned_entries:
+            obj = SceneObject()
+            obj.entity_name = entry['entity_name']
+            obj.model_name = entry['model_name']
+            obj.semantic_class = entry['semantic_class']
+            obj.pose.position.x = float(entry['x'])
+            obj.pose.position.y = float(entry['y'])
+            obj.pose.position.z = float(entry['z'])
+            half_yaw = float(entry['yaw']) / 2.0
+            obj.pose.orientation.z = math.sin(half_yaw)
+            obj.pose.orientation.w = math.cos(half_yaw)
+            manifest.objects.append(obj)
+        self._manifest_viz_pub.publish(manifest)
+        self.get_logger().info(
+            f'[VIZ_MANIFEST] Published {len(manifest.objects)} entity/-ies to /icgnet/scene_manifest_viz.'
+        )
+
+
 def main():
     rclpy.init()
     node = ObjectSpawner()
     node.spawn_all()
-    # Brief spin to let DDS propagate the latched spawn_pose message before shutdown.
+    node._publish_manifest_viz()
+    # Brief spin to let DDS propagate the latched messages before shutdown.
     rclpy.spin_once(node, timeout_sec=0.5)
     rclpy.shutdown()
 

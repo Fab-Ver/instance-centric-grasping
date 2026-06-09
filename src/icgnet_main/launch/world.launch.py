@@ -10,6 +10,7 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     use_gpu = LaunchConfiguration('use_gpu', default='false')
+    headless = LaunchConfiguration('headless', default='true')
 
     pkg_icgnet_main = get_package_share_directory('icgnet_main')
     pkg_panda = get_package_share_directory('panda_description')
@@ -26,6 +27,12 @@ def generate_launch_description():
 
     return LaunchDescription([
         set_gz_resource_path,
+
+        DeclareLaunchArgument(
+            'headless',
+            default_value='true',
+            description='Run Gazebo server-only (no GUI window). Camera sensor still works.',
+        ),
 
         DeclareLaunchArgument(
             'use_gpu',
@@ -46,6 +53,7 @@ def generate_launch_description():
                 'world': world_path,
                 'use_sim_time': 'true',
                 'use_gpu': use_gpu,
+                'headless': headless,
             }.items(),
         ),
 
@@ -107,6 +115,16 @@ def generate_launch_description():
             executable='static_transform_publisher',
             arguments=['0', '0', '0', '0', '0', '0',
                        'camera_link', 'camera_model/camera_link/rgbd_camera'],
+            parameters=[{'use_sim_time': True}],
+        ),
+
+        # RViz digital twin: publishes live Gazebo mesh poses as MarkerArray on /icgnet/scene_meshes.
+        # Always-on — covers GPU inference, replay, and multi-object modes identically.
+        Node(
+            package='icgnet_main',
+            executable='scene_visualizer',
+            name='scene_visualizer',
+            output='screen',
             parameters=[{'use_sim_time': True}],
         ),
 

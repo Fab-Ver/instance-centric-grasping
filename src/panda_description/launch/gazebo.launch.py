@@ -10,7 +10,7 @@ from launch.actions import (
 )
 from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
 
@@ -18,6 +18,7 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time', default='true')
     world = LaunchConfiguration('world', default='')
     use_gpu = LaunchConfiguration('use_gpu', default='false')
+    headless = LaunchConfiguration('headless', default='true')
 
     pkg_panda = get_package_share_directory('panda_description')
     pkg_ros_gz_sim = get_package_share_directory('ros_gz_sim')
@@ -59,14 +60,18 @@ def generate_launch_description():
         condition=UnlessCondition(use_gpu),
     )
 
-    # Gz-sim: server + GUI with OGRE1 renderer (WSL2 compatible).
-    # render_engine ogre = OGRE1; avoids OGRE2 crash on WSL2.
+    # Gz-sim: OGRE1 renderer (WSL2 compatible). headless:=true adds -s (server-only, no GUI window).
+    # Camera RGB-D sensor renders server-side (Sensors plugin) and works in both modes.
     gz_sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg_ros_gz_sim, 'launch', 'gz_sim.launch.py')
         ),
         launch_arguments={
-            'gz_args': [world, ' -r --render-engine ogre'],
+            'gz_args': [
+                world,
+                ' -r --render-engine ogre',
+                PythonExpression(["' -s' if '", headless, "' == 'true' else ''"]),
+            ],
         }.items(),
     )
 
@@ -101,29 +106,40 @@ def generate_launch_description():
         output='screen',
     )
 
+    # --service-call-timeout 60: under LLVMpipe the controller_manager (running inside
+    # gz-sim) can take >10s to answer load_controller. The default 10s lets the call time
+    # out while the request still completes server-side; the spawner then retries and hits
+    # "controller already loaded" -> FATAL, leaving joint_state_broadcaster loaded but
+    # never activated (no /joint_states). 60s absorbs the slow software-rendered startup.
+    # --controller-manager-timeout is left at its default 0 (wait forever for the CM).
     spawn_jsb = Node(
         package='controller_manager',
         executable='spawner',
-        arguments=['joint_state_broadcaster'],
+        arguments=['joint_state_broadcaster', '--service-call-timeout', '60'],
         output='screen',
     )
 
     spawn_arm = Node(
         package='controller_manager',
         executable='spawner',
-        arguments=['panda_arm_controller'],
+        arguments=['panda_arm_controller', '--service-call-timeout', '60'],
         output='screen',
     )
     spawn_hand = Node(
         package='controller_manager',
         executable='spawner',
-        arguments=['panda_hand_controller'],
+        arguments=['panda_hand_controller', '--service-call-timeout', '60'],
         output='screen',
     )
 
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='true'),
         DeclareLaunchArgument('world', default_value=''),
+        DeclareLaunchArgument(
+            'headless',
+            default_value='true',
+            description='true = server-only (no GUI); false = server + GUI window',
+        ),
         DeclareLaunchArgument(
             'use_gpu',
             default_value='false',

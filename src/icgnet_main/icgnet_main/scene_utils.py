@@ -28,6 +28,91 @@ def half_height_from_sdf(sdf_path: str) -> float:
     return 0.05
 
 
+def visual_geometry_from_sdf(sdf_path: str) -> dict | None:
+    """Parse the first <visual> geometry block from an SDF model file.
+
+    Returns a spec dict with kind-specific keys plus shared keys:
+      offset_xyz, offset_rpy  — visual-local pose offset (default zeros)
+      color_rgba              — (r, g, b, a) from <diffuse>, else neutral gray
+    Kind-specific keys:
+      'mesh':     uri (package://icgnet_main/models/...), scale (sx, sy, sz)
+      'cylinder': radius, length
+      'box':      dims (x, y, z)
+      'sphere':   radius
+    Returns None on parse failure or unknown geometry.
+    """
+    try:
+        with open(sdf_path) as f:
+            content = f.read()
+    except OSError:
+        return None
+
+    vm = re.search(r'<visual[^>]*>(.*?)</visual>', content, re.DOTALL)
+    if not vm:
+        return None
+    block = vm.group(1)
+
+    # Optional visual-local pose: x y z roll pitch yaw.
+    offset_xyz = (0.0, 0.0, 0.0)
+    offset_rpy = (0.0, 0.0, 0.0)
+    pm = re.search(r'<pose>(.*?)</pose>', block, re.DOTALL)
+    if pm:
+        vals = [float(v) for v in pm.group(1).split()]
+        if len(vals) >= 6:
+            offset_xyz = (vals[0], vals[1], vals[2])
+            offset_rpy = (vals[3], vals[4], vals[5])
+
+    # Optional diffuse color: r g b a.
+    color_rgba = (0.7, 0.7, 0.7, 1.0)
+    dm = re.search(r'<diffuse>([\d.\s]+)</diffuse>', block)
+    if dm:
+        vals = [float(v) for v in dm.group(1).split()]
+        if len(vals) >= 4:
+            color_rgba = (vals[0], vals[1], vals[2], vals[3])
+        elif len(vals) == 3:
+            color_rgba = (vals[0], vals[1], vals[2], 1.0)
+
+    base = {'offset_xyz': offset_xyz, 'offset_rpy': offset_rpy, 'color_rgba': color_rgba}
+
+    # Mesh: convert model://<head>/... → package://icgnet_main/models/<head>/...
+    mm = re.search(r'<mesh>.*?<uri>(.*?)</uri>.*?</mesh>', block, re.DOTALL)
+    if mm:
+        raw_uri = mm.group(1).strip()
+        uri = re.sub(r'^model://([^/]+)/(.*)', r'package://icgnet_main/models/\1/\2', raw_uri)
+        scale = (1.0, 1.0, 1.0)
+        sm = re.search(r'<scale>([\d.\s]+)</scale>', block)
+        if sm:
+            vals = [float(v) for v in sm.group(1).split()]
+            if len(vals) >= 3:
+                scale = (vals[0], vals[1], vals[2])
+        return {**base, 'kind': 'mesh', 'uri': uri, 'scale': scale}
+
+    # Cylinder.
+    cym = re.search(
+        r'<cylinder>.*?<radius>([\d.eE+-]+)</radius>.*?<length>([\d.eE+-]+)</length>.*?</cylinder>',
+        block, re.DOTALL,
+    )
+    if cym:
+        return {**base, 'kind': 'cylinder',
+                'radius': float(cym.group(1)), 'length': float(cym.group(2))}
+
+    # Box.
+    bm = re.search(
+        r'<box>.*?<size>([\d.eE+-]+)\s+([\d.eE+-]+)\s+([\d.eE+-]+)</size>.*?</box>',
+        block, re.DOTALL,
+    )
+    if bm:
+        return {**base, 'kind': 'box',
+                'dims': (float(bm.group(1)), float(bm.group(2)), float(bm.group(3)))}
+
+    # Sphere.
+    spm = re.search(r'<sphere>.*?<radius>([\d.eE+-]+)</radius>.*?</sphere>', block, re.DOTALL)
+    if spm:
+        return {**base, 'kind': 'sphere', 'radius': float(spm.group(1))}
+
+    return None
+
+
 def load_catalog(models_dir: str) -> dict:
     """Load and return models/catalog.yaml as a dict."""
     catalog_path = os.path.join(models_dir, 'catalog.yaml')

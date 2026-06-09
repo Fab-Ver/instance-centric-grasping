@@ -2,7 +2,7 @@
 
 **Branch:** `main`
 **Stack:** ROS2 Humble + Gazebo Sim Fortress (gz-sim 6, DART physics) + MoveIt2 + gz_ros2_control
-**Last updated:** 2026-06-03
+**Last updated:** 2026-06-09
 
 ---
 
@@ -83,11 +83,15 @@ source /opt/ros/humble/setup.bash && source install/setup.bash
 ros2 launch icgnet_main world.launch.py use_gpu:=true
 ```
 
+> **Gazebo headless (default `headless:=true`, 2026-06-09)**: no GUI gz window. RViz is the only
+> visualization — object meshes are mirrored live by `scene_visualizer` on `/icgnet/scene_meshes`.
+> Pass `headless:=false` to restore the gz GUI for physics debugging.
+
 Wait for:
-- Gazebo GUI window opens (OGRE1 renderer)
 - `[controller_manager]` ready
 - `[move_group]` → `Ready to take commands for planning group arm.`
 - `[gz_ros_bridge]` publishing (camera sensor init takes ~10 s)
+- RViz opens; `[scene_visualizer]` → `SceneVisualizerNode ready`
 
 ### T2 — Spawn objects (after T1 ready, ~15 s)
 
@@ -233,6 +237,21 @@ ros2 topic echo /icgnet/grasps_rich --once
 ros2 service call /get_planning_scene moveit_msgs/srv/GetPlanningScene \
   '{components: {components: 1}}' 2>/dev/null | grep '"id"'
 ```
+
+**RViz scene_visualizer — object meshes synced to the robot (2026-06-09):**
+
+```bash
+# Marker definitions republished at ~10 Hz (motion is carried by TF, not this rate):
+ros2 topic hz /icgnet/scene_meshes
+
+# Per-object moving TF frame <entity>_viz — must appear in the tree:
+ros2 run tf2_tools view_frames        # → world → target_obj_viz
+ros2 topic hz /tf                      # includes object frames at ~36 Hz
+```
+
+In RViz the object mesh stays **locked to the gripper** during approach/lift/transport — no lag,
+no detachment, as fluid as the robot. Each object gets its own `<entity>_viz` TF frame and a
+`frame_locked` marker (same latest-TF retransform RViz uses for the RobotModel).
 
 **Sanity check — no Classic remnants:**
 

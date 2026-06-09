@@ -290,12 +290,28 @@ class ICGNetGraspNode(Node):
             self._collision_pub.publish(co)
         self._published_collision_ids.clear()
 
+        # [RECON_DIAG] Report reconstruction count (helps diagnose multi-object blob issues).
+        # If len == 1 for a multi-object scene: Mask3D under-segmentation (upstream, not a code bug).
+        # If len == N but AABBs overlap: bounds margin or convex-hull inflation.
+        self.get_logger().info(f'[RECON_DIAG] {len(reconstructions)} reconstruction(s) from ICGNet.')
+        _raw_bounds: list = []  # (inst_id, bounds np[2,3]) before clip/hull, for overlap check
+
         # Publish new instances
         for idx, item in enumerate(reconstructions):
             if isinstance(item, tuple):
                 mesh, inst_id = item
             else:
                 mesh, inst_id = item, idx
+
+            if len(mesh.faces) > 0:
+                _b, _c = mesh.bounds, mesh.centroid
+                self.get_logger().info(
+                    f'[RECON_DIAG] inst={inst_id}: {len(mesh.vertices)}v {len(mesh.faces)}f '
+                    f'AABB=[{_b[0, 0]:.3f},{_b[0, 1]:.3f},{_b[0, 2]:.3f}]->'
+                    f'[{_b[1, 0]:.3f},{_b[1, 1]:.3f},{_b[1, 2]:.3f}] '
+                    f'centroid=({_c[0]:.3f},{_c[1]:.3f},{_c[2]:.3f})'
+                )
+                _raw_bounds.append((inst_id, mesh.bounds.copy()))
 
             if len(mesh.faces) == 0:
                 self.get_logger().warn(f"Instance {inst_id}: empty mesh, skipping collision object.")
@@ -320,6 +336,17 @@ class ICGNetGraspNode(Node):
             self.get_logger().info(
                 f"Published CollisionObject '{co_id}' ({len(mesh.faces)} triangles, hull={use_hull})."
             )
+
+        # Warn if any two raw instance AABBs overlap (sign of Mask3D under-segmentation or hull inflation).
+        for i in range(len(_raw_bounds)):
+            for j in range(i + 1, len(_raw_bounds)):
+                id_a, b_a = _raw_bounds[i]
+                id_b, b_b = _raw_bounds[j]
+                if all(b_a[0, k] < b_b[1, k] and b_b[0, k] < b_a[1, k] for k in range(3)):
+                    self.get_logger().warn(
+                        f'[RECON_DIAG] AABB OVERLAP: inst {id_a} ↔ inst {id_b}. '
+                        'Possible Mask3D under-segmentation or convex-hull inflation.'
+                    )
 
     def _compute_grasps_cb(self, _req, response):
         if self.predictor is None:

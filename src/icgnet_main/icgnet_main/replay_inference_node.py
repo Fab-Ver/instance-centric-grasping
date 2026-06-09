@@ -4,15 +4,18 @@ import subprocess
 import time
 
 import rclpy
+from ament_index_python.packages import get_package_share_directory
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.serialization import deserialize_message
 
 from moveit_msgs.msg import CollisionObject
-from icgnet_msgs.msg import GraspArray
+from icgnet_msgs.msg import GraspArray, SceneManifest, SceneObject
 from std_srvs.srv import Trigger
+
+from icgnet_main.scene_utils import find_model_sdf
 
 
 class ReplayInferenceNode(Node):
@@ -33,9 +36,21 @@ class ReplayInferenceNode(Node):
 
         cb = ReentrantCallbackGroup()
         qos_reliable = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, depth=10)
+        latched_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+
+        pkg_share = get_package_share_directory('icgnet_main')
+        self._models_dir = os.path.join(pkg_share, 'models')
 
         self._grasps_pub = self.create_publisher(GraspArray, '/icgnet/grasps_rich', 10)
         self._co_pub = self.create_publisher(CollisionObject, '/collision_object', qos_reliable)
+        self._manifest_viz_pub = self.create_publisher(
+            SceneManifest, '/icgnet/scene_manifest_viz', latched_qos,
+        )
 
         self.create_service(Trigger, '/icgnet/compute_grasps', self._trigger_cb, callback_group=cb)
 
@@ -122,10 +137,35 @@ class ReplayInferenceNode(Node):
             proc.wait()
             if proc.returncode == 0:
                 self.get_logger().info(f'Spawned {name}.')
+                self._publish_manifest_viz(name, sdf_path, x, y, z)
             else:
                 self.get_logger().warn(f'Spawn failed (exit {proc.returncode}).')
         except Exception as e:
             self.get_logger().error(f'Spawn exception: {e}')
+
+    def _publish_manifest_viz(self, entity_name: str, sdf_path: str, x: float, y: float, z: float):
+        """Publish a 1-entry latched manifest so scene_visualizer can render this object."""
+        model_name = os.path.basename(os.path.dirname(sdf_path))
+        # Confirm the model is resolvable from the installed share (needed by viz node).
+        if find_model_sdf(self._models_dir, model_name) is None:
+            self.get_logger().warn(
+                f'[VIZ_MANIFEST] Model {model_name!r} not found in share — mesh will not render.'
+            )
+        manifest = SceneManifest()
+        manifest.header.frame_id = 'world'
+        obj = SceneObject()
+        obj.entity_name = entity_name
+        obj.model_name = model_name
+        obj.semantic_class = 0
+        obj.pose.position.x = x
+        obj.pose.position.y = y
+        obj.pose.position.z = z
+        obj.pose.orientation.w = 1.0
+        manifest.objects.append(obj)
+        self._manifest_viz_pub.publish(manifest)
+        self.get_logger().info(
+            f'[VIZ_MANIFEST] Published {entity_name}({model_name}) to /icgnet/scene_manifest_viz.'
+        )
 
 
 def main(args=None):
