@@ -6,3 +6,7 @@ bool skip_place        # if true: grasp+lift+HOME only (debug); default false = 
 bool success
 int32 grasps_attempted
 string message
+float32 planning_time     # ICGNet inference + grasp selection wall-time (s)
+float32 execution_time    # arm/gripper motion wall-time across attempts (s)
+bool collision_detected   # true if any Cartesian approach move failed (collision proxy)
+bool target_not_found     # true if ICGNet returned no grasps for the target class

@@ -78,6 +78,8 @@ def generate_launch_description():
                 '/camera/rgbd_camera/camera_info@sensor_msgs/msg/CameraInfo[ignition.msgs.CameraInfo',
                 # gz-sim entity services for spawn_object + grasp_executor reset_scene
                 '/world/icgnet_world/set_pose@ros_gz_interfaces/srv/SetEntityPose',
+                # Entity removal — used by the Phase 1 evaluator to clear the scene between runs
+                '/world/icgnet_world/remove@ros_gz_interfaces/srv/DeleteEntity',
                 # Model poses: child_frame_id = model name; used by grasp_executor for
                 # physical success check (_object_in_bin). Remapped to /model_poses for brevity.
                 '/world/icgnet_world/dynamic_pose/info@tf2_msgs/msg/TFMessage[ignition.msgs.Pose_V',

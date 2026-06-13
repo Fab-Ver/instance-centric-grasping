@@ -43,7 +43,7 @@ Build (from workspace root):
 
 ```bash
 cd ~/instance-centric-grasping
-colcon build --packages-select panda_description icgnet_msgs icgnet_main pymoveit2
+colcon build --packages-select panda_description icgnet_msgs icgnet_main pymoveit2 
 source install/setup.bash
 ```
 
@@ -112,19 +112,21 @@ ros2 run icgnet_main spawn_object --ros-args -p target_class:=can
 cd ~/instance-centric-grasping
 source /opt/ros/humble/setup.bash && source install/setup.bash
 
-# Spawns 2 cans (target_obj_0, target_obj_1) + 2–3 random distractors of OTHER classes.
+# Spawns 2 cans + 2–3 random objects of OTHER classes (box, mug, ball).
+# target_class / target_count only control spawn quantities — execute_grasp
+# can target ANY class present in the scene, regardless of how it was spawned.
 # Node stays alive to serve /icgnet/reset_scene.
 ros2 run icgnet_main scene_manager --ros-args \
   -p target_class:=can -p target_count:=2
 
-# Verify manifest published:
+# Verify manifest (shows all objects with their semantic class):
 ros2 topic echo /icgnet/scene_manifest --once
 
 # Manual reset (teleports all objects back to spawn pose):
 ros2 service call /icgnet/reset_scene std_srvs/srv/Trigger
 ```
 
-Available classes: `can`, `bottle`, `box`, `mug`, `cylindric`, `ball`, `other`
+Available classes: `can`, `box`, `mug`, `ball`
 
 ### T3 — Perception (choose A or B)
 
@@ -173,10 +175,14 @@ ros2 launch icgnet_main grasp_execution.launch.py
 # Step 1: run inference
 ros2 service call /icgnet/compute_grasps std_srvs/srv/Trigger
 
-# Step 2: execute
-# Single-object: grasps one object and places it in the bin
-# Multi-object: sweeps all instances of the target class into the bin, distractors stay
+# Step 2: execute — target sets WHAT to grasp, independent of how objects were spawned.
+# With T2-A: grasps the single object if it matches the target class.
+# With T2-B: sweeps ALL instances of the target class (including those spawned as
+#            "distractors") into the bin; objects of other classes are left in place.
+#            If the requested class is absent from the manifest, returns an error
+#            listing which classes ARE present.
 ros2 service call /icgnet/execute_grasp icgnet_msgs/srv/ExecuteGrasp "{target: 'can'}"
+ros2 service call /icgnet/execute_grasp icgnet_msgs/srv/ExecuteGrasp "{target: 'box'}"
 ros2 service call /icgnet/execute_grasp icgnet_msgs/srv/ExecuteGrasp "{target: 'any'}"
 
 # Debug (lift only, no place):

@@ -559,6 +559,20 @@ class ICGNetGraspNode(Node):
             f"[INSTANCES] {len(unique_insts)} instance(s): {', '.join(inst_summary)} | total_grasps={n_total}"
         )
 
+        # Log per-instance grasp position spread (world frame) — reveals whether grasps
+        # tagged for a class are physically clustered on the right object or scattered.
+        for iid in unique_insts:
+            c = centers[inst_ids == iid]
+            if len(c) == 0:
+                continue
+            cls_id = int(sem_class_raw[inst_ids == iid][0])
+            mn, mx, mean = c.min(axis=0), c.max(axis=0), c.mean(axis=0)
+            self.get_logger().info(
+                f"[GRASP_POS] inst_{iid} {CLASS_NAMES.get(cls_id, '?')} ({len(c)}g): "
+                f"mean=({mean[0]:.3f},{mean[1]:.3f},{mean[2]:.3f}) "
+                f"x=[{mn[0]:.3f},{mx[0]:.3f}] y=[{mn[1]:.3f},{mx[1]:.3f}] z=[{mn[2]:.3f},{mx[2]:.3f}]"
+            )
+
         if n_total > 0:
             s_sorted = np.sort(scores)[::-1]
             top_k = min(10, n_total)

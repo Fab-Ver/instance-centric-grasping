@@ -247,6 +247,10 @@ class GraspExecutorNode(Node):
         # Published lazily on the first execute_grasp call, when move_group is ready.
         self._bin_co_published = False
 
+        # Evaluation instrumentation: set True when a Cartesian approach move fails
+        # (collision / INVALID_MOTION_PLAN proxy).  Reset before each attempt loop.
+        self._last_collision_detected = False
+
         # Multi-object sweep state.  Set when a SceneManifest arrives from scene_manager.
         # While False, every execute_grasp call uses the single-object path (unchanged).
         self._multi_object = False
@@ -512,6 +516,10 @@ class GraspExecutorNode(Node):
         max_attempts = req.max_attempts if req.max_attempts > 0 else self._default_max_attempts
         skip_place = req.skip_place
 
+        res.planning_time = 0.0
+        res.execution_time = 0.0
+        res.collision_detected = False
+
         self.get_logger().info(
             f"ExecuteGrasp: target='{target}' max_attempts={max_attempts} skip_place={skip_place}"
         )
@@ -538,6 +546,7 @@ class GraspExecutorNode(Node):
             res.message = f"Service '{self._compute_client.srv_name}' not available"
             return res
 
+        t_plan_start = time.time()
         future = self._compute_client.call_async(Trigger.Request())
         if not self._wait_for_future(future, timeout=self._inference_timeout):
             res.success = False
@@ -557,13 +566,18 @@ class GraspExecutorNode(Node):
                 break
             time.sleep(0.1)
 
+        res.planning_time = time.time() - t_plan_start
+        res.target_not_found = False
+
         if grasps is None or len(grasps.grasps) == 0:
             res.success = False
+            res.target_not_found = True
             res.message = "No grasps received after inference"
             return res
 
         candidates = self._filter_grasps(grasps.grasps, target)
         if not candidates:
+            res.target_not_found = True
             available = sorted({CLASS_NAMES.get(g.semantic_class, '?') for g in grasps.grasps})
             res.success = False
             res.message = (
@@ -588,6 +602,9 @@ class GraspExecutorNode(Node):
                 f"angle_from_vertical={angle_from_vertical:.1f}° width={g.width:.3f}"
             )
 
+        self._last_collision_detected = False
+        t_exec_start = time.time()
+
         for i, g in enumerate(candidates):
             p = g.pose.position
             self.get_logger().info(
@@ -600,6 +617,8 @@ class GraspExecutorNode(Node):
                 self._clear_current_grasp_marker()
                 res.success = True
                 res.grasps_attempted = i + 1
+                res.execution_time = time.time() - t_exec_start
+                res.collision_detected = self._last_collision_detected
                 res.message = f"Grasp succeeded on attempt {i+1}"
                 self.get_logger().info(
                     f"[SUCCESS] Grasp completed on attempt {i+1}/{len(candidates)}"
@@ -615,6 +634,8 @@ class GraspExecutorNode(Node):
         self._clear_current_grasp_marker()
         res.success = False
         res.grasps_attempted = len(candidates)
+        res.execution_time = time.time() - t_exec_start
+        res.collision_detected = self._last_collision_detected
         res.message = f"All {len(candidates)} grasp attempts failed"
         return res
 
@@ -1135,6 +1156,7 @@ class GraspExecutorNode(Node):
         ok = self._arm.wait_until_executed()
         dt = time.time() - t0
         if not ok:
+            self._last_collision_detected = True
             self.get_logger().warn(
                 f"[STEP 2/5] APPROACH FAILED in {dt:.2f}s — aborting this candidate"
             )
