@@ -1,113 +1,115 @@
-# Issue — Grasp etichettati per la classe target ma fisicamente sull'oggetto sbagliato
+# Issue — ICGNet under-segmenta le scene multi-oggetto (instance/semantic)
 
 > Rilevato: 2026-06-13 — branch `main`
-> Stato: 🔴 aperto — diagnostica in corso (aggiunto logging `[GRASP_POS]`)
+> Stato: 🔴 **confermato, non risolvibile via input** — decisione di scope presa (vedi sotto).
+> Questo file è la **fonte unica** sulla diagnostica multi-oggetto ICGNet (assorbe il vecchio
+> `recon_diagnostics_guide.md`, eliminato perché partiva da un'assunzione poi smentita).
 
 ## Sintomo
 
-`execute_grasp {target: 'box'}` con la box a **sinistra** (y=-0.199): il robot tenta di
-afferrare la zona centrale/destra della scena (in mezzo a palline + can), **non** la box.
+`execute_grasp {target: 'box'}` in scena multi-oggetto: il robot afferra l'oggetto **sbagliato**
+(es. una lattina) credendolo la box. ICGNet non riesce a separare/etichettare gli oggetti, quindi
+non possiamo indicargli quale oggetto prendere.
 
-## Scena di riproduzione
+## Causa radice CONFERMATA
 
-`scene_manager` con `target_class:=box target_count:=1`:
+**Under-segmentation di Mask3D** dentro ICGNet: il modello collassa più oggetti distinti in
+poche istanze che coprono l'intera scena, e la testa semantica mescola le classi *dentro* lo
+stesso oggetto. È un **domain gap** (training PyBullet/TSDF → nostre nuvole Gazebo single-view),
+non un bug del nostro codice né della patch.
 
-| Entity | Modello | Posa (x, y, z) |
+### Evidenza — run #1 (oggetti sparsi)
+
+Scena: box target + 3 distrattori (cans/ball) ben separati.
+```
+class_preds=[3]
+[INSTANCES] inst_0=box(18g), inst_1=can(2g), inst_2=ball(276g) | total=296
+[RECON_DIAG] inst=0 box  AABB y=[-0.253,0.257] centroid=(0.600,0.010)   ← box reale a y=-0.199
+[RECON_DIAG] inst=1 can  AABB y=[-0.251,0.257] centroid=(0.598,0.043)   ← AABB ~identica a inst_0
+[RECON_DIAG] AABB OVERLAP: inst 0 ↔ inst 1
+[SCORES] max=0.4452 mean=0.3317 >0.5: 0
+```
+Ogni istanza ha un AABB che copre l'**intera** scena (51 cm in Y); il centroide "box" è al centro
+scena (y=+0.01), non sulla box (y=-0.199). 93% dei grasp finisce su una sola mega-istanza.
+
+### Evidenza — run #2 (oggetti vicini, cluster ~10 cm)
+
+Scena: box (0.617,0.014) + beer_can (0.524,0.053) + tennis_ball (0.581,-0.062).
+```
+[FILTER] total=898 → kept=1 (box)  | rejected: target=825 (non-box) low_prepos=72
+grasp "box" scelto: icgnet_tcp=[0.519,0.009,0.105]   ← è sulla beer_can (0.524,0.053), NON sulla box (0.617)
+```
+Su 898 grasp, ICGNet etichetta "box" un solo punto, per giunta posizionato sulla lattina. Avvicinare
+gli oggetti **non** ha cambiato nulla.
+
+### Evidenza — run #3 (oggetti GSO, geometria in-distribution)
+
+Test dell'**ultima variabile non isolata**: la geometria degli oggetti. Spawnati 3 **Google Scanned
+Objects** reali (gli stessi del training ICGNet, da Gazebo Fuel): canister(can) + choc_box(box) + mug,
+a (0.59, y) spaziati 13 cm.
+```
+class_preds=[6]   ← 6 istanze per 3 oggetti (OVER-segmentation)
+[INSTANCES] inst_0=box, inst_1=can, inst_2=box, inst_3=can, inst_4=ball, inst_5=ball
+            ← 2 "ball" ALLUCINATE (nessuna palla in scena), nessun "mug", can/box duplicati
+14 coppie AABB OVERLAP su 6 istanze
+```
+Con geometria **in-distribution** il failure mode *cambia* (da under- a **over**-segmentation, con
+classi inventate) ma resta inutilizzabile: 6≠3 istanze, classi sbagliate. La geometria reale NON
+risolve. (Nota: con `grasp_score_threshold=0.0` l'output ha ~17k grasp quasi tutti score~0 → il
+`[GRASP_POS]` è rumoroso, ma `class_preds=6` viene da Mask3D nell'encoder, **indipendente** dal
+threshold → le 6 istanze sbagliate sono segmentazione reale.)
+
+## Cosa abbiamo testato ed ESCLUSO
+
+| Ipotesi | Verdetto | Motivo |
 |---|---|---|
-| `target_obj_0` | cardboard_box | (0.592, **-0.199**, 0.047) |
-| `distractor_0` | baseball | (0.483, +0.074, 0.041) |
-| `distractor_1` | tennis_ball | (0.669, +0.041, 0.040) |
-| `distractor_2` | soup_can | (0.601, +0.222, 0.052) |
+| **Camera (intrinsics/FOV)** | ❌ non è la causa | 640×480 e ~60° HFOV **identici** al training (`CameraIntrinsic(640,480,540,540,...)`, HFOV 61°). |
+| **Viewpoint** | ❌ non è la causa | Elevazione ~53° e distanza ~0.70 m ≈ modo "top" del training (60°, 0.60 m). Top-down testato, nessun cambiamento. |
+| **Spaziatura / scala scena** | ❌ non è la causa | Cluster stretto 14×14 cm (= `generate_packed_scene` del training, `x,y∼U(0.08,0.22)`) → ancora merge. |
+| **Offset world-frame** | ❌ irrilevante | `scene_bounds=extract_scene_bounds(coords)` ricalcolato ogni forward (`model/icgnet.py:673`) → pos-encoding normalizzata sul bbox. |
+| **Piano di terra** | ❌ escluso | `workspace_z_min=0.01` lo rimuove; bin escluso a parte. |
+| **Convex-hull inflation** | ⚠️ secondaria | Gonfia l'AABB ma non spiega istanze/grasp scene-wide. |
+| **Geometria oggetti (GSO)** | ❌ non è la causa | Oggetti GSO reali in-distribution (run #3) → over-segmentation con classi allucinate. La geometria reale non risolve. |
 
-## Dati ICGNet (inference)
+**Vincoli del modello** (`icgnet_weights/config.yaml`): `voxel_size=0.003` (fine), `num_queries=32`
+(capacità OK), `add_normals/add_colors/add_z=false` (segmentazione puramente geometrica), pesi
+pretrained **congelati** → no retrain.
 
-```
-Raw grasp tensors: rot=[296,3,3], centers=[296,3], scores=[296], class_preds=[3]
-Reconstructed 3 instance mesh(es).
-[RECON] inst_0 → class=box (id=1)
-[RECON] inst_1 → class=can (id=2)
-[RECON] inst_2 → class=ball (id=5)
-[INSTANCES] inst_0=box(id=1, 18g), inst_1=can(id=2, 2g), inst_2=ball(id=5, 276g) | total=296
-[SCORES] max=0.4452 min=0.3000 mean=0.3317 | >0.3: 296  >0.5: 0  >0.7: 0
-[RECON_DIAG] inst=0: AABB=[0.547,-0.253,-0.041]->[0.638,0.257,0.099] centroid=(0.600,0.010,0.047)
-[RECON_DIAG] inst=1: AABB=[0.548,-0.251,-0.020]->[0.637,0.257,0.099] centroid=(0.598,0.043,0.060)
-Instance 2: empty mesh, skipping collision object.
-[RECON_DIAG] AABB OVERLAP: inst 0 ↔ inst 1.
-```
+## Verdetto
 
-## Indizi e interpretazione
+La mis-segmentazione (under- o over- a seconda della scena) è un **domain gap del modello
+congelato** e **non è risolvibile agendo sull'input**. Ablazione di 4 variabili — camera,
+viewpoint, spaziatura, **geometria oggetti (GSO)** — tutte negative. Esclusa anche la geometria
+in-distribution, l'unica variabile rimasta è la **pipeline del sensore**:
 
-| Indizio | Valore | Lettura |
-|---|---|---|
-| Centroide istanza box | (0.600, **+0.010**, 0.047) | Box reale a y=-0.199 → istanza mislocalizzata al centro scena |
-| AABB inst_0 e inst_1 in Y | -0.25 → +0.26 (**51 cm**) | Ogni istanza copre l'intera scena → impossibile per oggetti separati |
-| `AABB OVERLAP inst 0 ↔ inst 1` | warning | Istanze geometricamente sovrapposte |
-| Distribuzione grasp | ball=276, box=18, can=2 | 93% dei grasp sulla palla; inst_2 ha **mesh vuota** |
-| Scores | max 0.44, mean 0.33, **nessuno >0.5** | Predizione ICGNet di bassa qualità su tutta la scena |
+> Noi diamo a Mask3D una **depth raw single-view di Gazebo**; il training usa **TSDF-fusion**
+> (`data_collection/.../simulation.py::acquire_tsdf` integra la depth in un volume TSDF da cui
+> estrae la nuvola — superficie liscia, completa, densità uniforme). Mask3D è verosimilmente
+> sensibile a quella qualità di superficie. Single-object funziona perché con 1 oggetto
+> `scene_bounds` = bbox dell'oggetto → riempie lo spazio normalizzato; il multi-oggetto collassa.
 
-**Causa NON è il centroide né l'executor.** L'executor filtra i grasp per
-`semantic_class == box` (`_matches_target`) e va sulla **posizione del singolo grasp**, non
-sul centroide. Il centroide è solo un sintomo diagnostico. Il problema è a monte: la
-**segmentazione di istanza (Mask3D) di ICGNet è degenere** — assegna ai grasp "box" posizioni
-fisicamente sbagliate (centro scena invece che y=-0.199), e ricostruisce istanze che si
-estendono su tutta la scena.
+L'unica leva non testata — **implementare TSDF-fusion multi-vista** (replicare `acquire_tsdf`) — è
+la pipeline esatta del training ma è lavoro consistente → **fuori scope** per la deadline.
 
-## Causa radice CONFERMATA (2026-06-13, run #2)
+## Decisione di scope (2026-06-13)
 
-**Under-segmentation di Mask3D** dentro ICGNet. Il modello collassa più oggetti distinti in
-poche istanze che coprono l'intera scena.
+Vincolati a usare ICGNet:
+1. **Valutazione su single-object** per classe (`ball`, `box`, `can`): 1 oggetto, **0 distrattori**.
+2. **Multi-oggetto = limite documentato** nel report (risultato negativo *misurato* + figura).
+3. **Workaround clustering geometrico** (separare per geometria, classificare per forma) considerato
+   ma **fuori scope**: il mandato è valutare ICGNet, non sostituirne la segmentazione. Citato come
+   future work nel report (preempt alla domanda "perché non avete clusterizzato?").
 
-Run di conferma (scena: box target + 3 cilindri/lattine, tutti ben separati):
-```
-class_preds=[2]   ← solo 2 istanze per 4 oggetti
-[INSTANCES] inst_0=box(31g), inst_1=can(1141g)
-[GRASP_POS] inst_0 box (31g): mean=(0.525,0.085,0.122) y=[-0.193,0.217]   ← span TUTTA la scena
-[GRASP_POS] inst_1 can (1141g): mean=(0.603,-0.055,0.118) y=[-0.224,0.234]
-[RECON_DIAG] inst=0 centroid=(0.550,-0.028) AABB y=[-0.215,0.218]
-[RECON_DIAG] inst=1 centroid=(0.553,-0.021) AABB y=[-0.214,0.218]   ← quasi identica a inst=0
-[SCORES] max=0.7511 mean=0.4678 >0.5: 450
-```
-ICGNet mette ~tutto in una mega-istanza "can" (1141 grasp) + una "box" sparsa di 31 grasp-rumore
-distribuiti su tutta la scena. L'executor sceglie il grasp "box" con score più alto → punto
-casuale in mezzo ai cilindri → afferra l'oggetto sbagliato.
+## Riferimento — come leggere i log diagnostici
 
-**Vincoli del modello** (`icgnet_weights/config.yaml`):
-- `voxel_size: 0.003` (3mm, risoluzione fine — non è il limite)
-- `num_queries: 32` (capacità fino a 32 istanze — non è il limite)
-- `add_normals/add_colors/add_z: false` → segmentazione **puramente geometrica** (feature costante)
-- Pesi pretrained PyBullet **congelati** → no retrain praticabile.
+Dopo `ros2 service call /icgnet/compute_grasps std_srvs/srv/Trigger`, in T2/T3:
 
-**Cause scartate:**
-- Offset world-frame: `scene_bounds=extract_scene_bounds(coords)` normalizza la pos-encoding sul
-  bbox degli oggetti → l'offset assoluto è irrilevante.
-- Piano di terra: `workspace_z_min=0.01` lo rimuove già; bin escluso a parte.
-- Convex-hull inflation: secondaria, non spiega istanze/grasp scene-wide.
+- `[INSTANCES] N instance(s): inst_i=class(id, Ng)` — quante istanze e quanti grasp ciascuna.
+- `[GRASP_POS] inst_i class (Ng): mean=(x,y,z) x=[..] y=[..] z=[..]` — spread XYZ dei grasp per
+  istanza in world frame. **Range Y largo (~tutta la scena) = under-segmentation.**
+- `[RECON_DIAG] inst=i: Nv Nf AABB=[..]->[..] centroid=(..)` — geometria mesh per istanza.
+- `[RECON_DIAG] AABB OVERLAP: inst A ↔ inst B` — AABB sovrapposti (sintomo di merge o hull inflation).
+- `[SCORES] ... >0.5: K` — qualità grasp; K basso/0 = predizione poco confidente (input OOD).
 
-**Causa residua plausibile:** domain gap di viewpoint (training PyBullet multi-view randomizzato
-vs nostra singola vista obliqua fissa ~55° da `[0.97,0,0.616]`) e/o assenza del piano di
-supporto su cui il modello è stato addestrato.
-
-## Opzioni di fix (modello congelato → solo input o post-processing)
-
-**A) Clustering geometrico post-hoc** (pragmatico, indipendente da ICGNet):
-gli oggetti sono fisicamente separati (gap >10cm). Si fa Euclidean/DBSCAN clustering sulla
-`preprocessed_cloud` per ottenere le istanze VERE, poi si assegna ogni grasp ICGNet al cluster
-più vicino; la classe semantica per-cluster = voto di maggioranza delle label per-grasp ICGNet.
-`target=box` → cluster la cui maggioranza è box. Disaccoppia l'esecuzione dalla segmentazione
-rotta. Costo: medio. Rischio: la label semantica ICGNet potrebbe restare rumorosa.
-
-**B) Migliorare l'input per far segmentare ICGNet correttamente:**
-- B1: viewpoint più top-down (esperimento più economico — solo TF camera + SDF).
-- B2: fusione multi-vista (più clouds da angoli diversi) → cloud più completa, vicina al training.
-Costo: B1 basso, B2 alto. Rischio: potrebbe non bastare (domain gap).
-
-## Azione presa
-
-Aggiunto logging `[GRASP_POS]` in `grasp_service_node.py` (dopo `[INSTANCES]`): media + range
-XYZ delle posizioni grasp per-istanza in world frame. Ha confermato lo span scene-wide.
-
-## Prossimi passi
-
-- [ ] Decidere strategia di fix (A vs B).
-- [ ] Se B1: testare camera più top-down e ri-osservare n_istanze.
-- [ ] Se A: implementare clustering + mapping grasp→cluster nell'executor/service node.
+Codice: `grasp_service_node._publish_collision_objects_from_reconstructions` (RECON_DIAG) e il blocco
+`[INSTANCES]`/`[GRASP_POS]` subito dopo l'inferenza.

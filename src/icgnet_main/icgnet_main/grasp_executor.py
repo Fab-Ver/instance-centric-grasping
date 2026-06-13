@@ -200,20 +200,6 @@ class GraspExecutorNode(Node):
         self._grasps_lock = Lock()
         self.create_subscription(GraspArray, rich_topic, self._grasps_cb, 10, callback_group=cb_sub)
 
-        self._object_spawn_pos: Point | None = None
-        self.create_subscription(
-            Point,
-            '/icgnet/object_spawn_pose',
-            self._spawn_pose_cb,
-            QoSProfile(
-                reliability=ReliabilityPolicy.RELIABLE,
-                durability=DurabilityPolicy.TRANSIENT_LOCAL,
-                history=HistoryPolicy.KEEP_LAST,
-                depth=1,
-            ),
-            callback_group=cb_sub,
-        )
-
         self._current_grasp_pub = self.create_publisher(MarkerArray, '/icgnet/current_grasp_marker', 1)
         self._object_pose_pub = self.create_publisher(PoseStamped, '/icgnet/object_pose', 1)
 
@@ -238,6 +224,10 @@ class GraspExecutorNode(Node):
         # Object pose from gz-sim dynamic_pose/info — used for physical success check.
         self._object_pose_lock = Lock()
         self._object_pose: Point | None = None
+        # Authoritative teleport-back target: the object's real pose captured from
+        # /model_poses at inference time (before any arm motion). Used by _reset_scene
+        # instead of the spawn-pose topic / yaml fallback, which can be stale/wrong.
+        self._reset_target_pose: Point | None = None
         self.create_subscription(
             TFMessage, '/model_poses', self._model_poses_cb, 10, callback_group=cb_sub
         )
@@ -281,12 +271,6 @@ class GraspExecutorNode(Node):
     def _grasps_cb(self, msg: GraspArray):
         with self._grasps_lock:
             self._latest_grasps = msg
-
-    def _spawn_pose_cb(self, msg: Point):
-        self._object_spawn_pos = msg
-        self.get_logger().info(
-            f'[SPAWN_POSE] Object spawn pose received: ({msg.x:.3f}, {msg.y:.3f}, {msg.z:.3f})'
-        )
 
     def _manifest_cb(self, msg: SceneManifest):
         with self._manifest_lock:
@@ -372,14 +356,27 @@ class GraspExecutorNode(Node):
         # at the position seen by inference — teleporting would move it away from the
         # predicted grasp poses and cause misses.
         if teleport_object:
-            if self._set_entity_client.wait_for_service(timeout_sec=2.0):
-                if self._object_spawn_pos is not None:
-                    rx, ry, rz = (self._object_spawn_pos.x,
-                                  self._object_spawn_pos.y,
-                                  self._object_spawn_pos.z)
-                else:
-                    self.get_logger().warn('[RESET] No spawn pose received — using yaml fallback.')
-                    rx, ry, rz = self._object_init_x, self._object_init_y, self._object_init_z
+            # Reset target: the object's real pose captured at inference time
+            # (from /model_poses), with the yaml pose as last-resort fallback.
+            if self._reset_target_pose is not None:
+                rx, ry, rz = (self._reset_target_pose.x,
+                              self._reset_target_pose.y,
+                              self._reset_target_pose.z)
+            else:
+                self.get_logger().warn('[RESET] No object pose from /model_poses — using yaml fallback.')
+                rx, ry, rz = self._object_init_x, self._object_init_y, self._object_init_z
+
+            # Skip the teleport if the object is essentially still where it should be:
+            # a planning/pre-grasp failure never touched it, and teleporting would
+            # reset its orientation (corrupting non-symmetric objects like the box)
+            # and shift it away from the grasp poses ICGNet predicted.
+            with self._object_pose_lock:
+                cur = self._object_pose
+            if cur is not None and np.hypot(cur.x - rx, cur.y - ry) < 0.03:
+                self.get_logger().info(
+                    '[RESET] Object undisturbed (<3cm from target) — skipping teleport.'
+                )
+            elif self._set_entity_client.wait_for_service(timeout_sec=2.0):
                 req = SetEntityPose.Request()
                 req.entity.name = self._object_entity_name
                 req.entity.type = Entity.MODEL
@@ -600,6 +597,17 @@ class GraspExecutorNode(Node):
                 f"pos=[{p.x:.3f},{p.y:.3f},{p.z:.3f}] "
                 f"approach=[{approach[0]:.3f},{approach[1]:.3f},{approach[2]:.3f}] "
                 f"angle_from_vertical={angle_from_vertical:.1f}° width={g.width:.3f}"
+            )
+
+        # Capture the object's real pose now (arm at home, object untouched) so any
+        # inter-attempt reset teleports it back exactly where ICGNet saw it.
+        with self._object_pose_lock:
+            self._reset_target_pose = self._object_pose
+        if self._reset_target_pose is not None:
+            self.get_logger().info(
+                f"[RESET] Teleport-back target = "
+                f"[{self._reset_target_pose.x:.3f}, {self._reset_target_pose.y:.3f}, "
+                f"{self._reset_target_pose.z:.3f}] (from /model_poses)"
             )
 
         self._last_collision_detected = False

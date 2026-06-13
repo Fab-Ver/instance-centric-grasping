@@ -10,8 +10,10 @@
 box:
   class_id: 1
   models:
-    - wood_cube    # [prim] 76x76x76mm wooden cube (~439cm3), gap=38mm < max_finger_gap=40mm
-    - cardboard_box  # [prim] 74x68x90mm cardboard box (~453cm3), 74/68mm faces graspable
+    - cardboard_box  # [prim] 74x68x90mm — graspable across 68mm face (12mm clearance vs 80mm gripper)
+    # wood_cube (76x76x76mm) removed: only 4mm total clearance vs the 80mm gripper → effectively
+    # ungraspable (ICGNet tip collision filter rejects it). Keeping it would conflate a physical size
+    # limit with ICGNet's grasp-synthesis weakness on boxes, biasing the single-object eval.
 can:
   class_id: 2
   models:

@@ -48,6 +48,7 @@ class ICGNetPredictor:
         grasp_normals: np.ndarray | None = None,
         n_grasps: int = 64,
         return_meshes: bool = False,
+        score_threshold: float = 0.0,
     ) -> Any:
         """
         Run inference on the given point cloud.
@@ -63,6 +64,10 @@ class ICGNetPredictor:
         :param return_meshes: if True, run marching cubes per instance and populate
                               ModelPredOut.reconstructions (list of trimesh.Trimesh).
                               Adds ~0.5-2s latency on GPU. Use on-demand only.
+        :param score_threshold: ICGNet drops grasps with score <= this before returning.
+                              Default 0.0 disables the cull (the model's own default is 0.3),
+                              so every candidate is returned and ranked by the executor — no
+                              grasp is excluded upstream, low-score ones are simply tried last.
         :return: ModelPredOut with scene_grasp_poses, class_predictions, reconstructions.
         """
         from .pointcloud_utils import to_torch_tensors
@@ -87,6 +92,7 @@ class ICGNetPredictor:
                 each_object=True,
                 return_meshes=return_meshes,
                 return_scene_grasps=True,
+                th=score_threshold,
             )
 
         _logger.info(

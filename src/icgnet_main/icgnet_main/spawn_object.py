@@ -5,7 +5,6 @@ import time
 
 import rclpy
 from ament_index_python.packages import get_package_share_directory
-from geometry_msgs.msg import Point
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 
@@ -71,7 +70,6 @@ class ObjectSpawner(Node):
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
         )
-        self._spawn_pose_pub = self.create_publisher(Point, '/icgnet/object_spawn_pose', latched_qos)
         # Viz-only manifest: lets scene_visualizer map entity→model in single/multi-spawn modes.
         # Published on a separate topic so grasp_executor does not treat it as a multi-object sweep.
         self._manifest_viz_pub = self.create_publisher(SceneManifest, '/icgnet/scene_manifest_viz', latched_qos)
@@ -142,12 +140,6 @@ class ObjectSpawner(Node):
                 'semantic_class': self._model_to_class.get(model_name, 0),
                 'x': x, 'y': y, 'z': spawn_z, 'yaw': yaw,
             })
-            if entity_name == 'target_obj':
-                pt = Point(x=float(x), y=float(y), z=float(spawn_z))
-                self._spawn_pose_pub.publish(pt)
-                self.get_logger().info(
-                    f'[{entity_name}] Spawn pose published: ({x:.3f}, {y:.3f}, {spawn_z:.4f})'
-                )
         else:
             self.get_logger().error(f'[{entity_name}] Spawn failed.')
 

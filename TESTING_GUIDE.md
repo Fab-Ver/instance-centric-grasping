@@ -80,7 +80,7 @@ ros2 launch icgnet_main world.launch.py
 ```bash
 cd ~/instance-centric-grasping
 source /opt/ros/humble/setup.bash && source install/setup.bash
-ros2 launch icgnet_main world.launch.py use_gpu:=true
+ros2 launch icgnet_main world.launch.py
 ```
 
 > **Gazebo headless (default `headless:=true`, 2026-06-09)**: no GUI gz window. RViz is the only

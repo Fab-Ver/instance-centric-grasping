@@ -114,6 +114,9 @@ class ICGNetGraspNode(Node):
         self.declare_parameter('target_frame', 'world')
         self.declare_parameter('voxel_size', 0.003)
         self.declare_parameter('n_grasps', 32)
+        # 0.0 = no upstream score cull (ICGNet's own default is 0.3). Return every grasp and
+        # let the executor rank/try them high-to-low — nothing excluded a priori.
+        self.declare_parameter('grasp_score_threshold', 0.0)
         self.declare_parameter('workspace_x_min', 0.25)
         self.declare_parameter('workspace_x_max', 1.05)
         self.declare_parameter('workspace_y_min', -0.50)
@@ -144,6 +147,7 @@ class ICGNetGraspNode(Node):
         self.target_frame = self.get_parameter('target_frame').get_parameter_value().string_value
         self.voxel_size = self.get_parameter('voxel_size').get_parameter_value().double_value
         self.n_grasps = self.get_parameter('n_grasps').get_parameter_value().integer_value
+        self.grasp_score_threshold = self.get_parameter('grasp_score_threshold').get_parameter_value().double_value
         self.workspace_bounds = {
             'x': (self.get_parameter('workspace_x_min').get_parameter_value().double_value,
                   self.get_parameter('workspace_x_max').get_parameter_value().double_value),
@@ -502,6 +506,7 @@ class ICGNetGraspNode(Node):
             seg_pts, seg_normals,
             grasp_points=grasp_pts, grasp_normals=grasp_normals,
             n_grasps=self.n_grasps, return_meshes=do_meshes,
+            score_threshold=self.grasp_score_threshold,
         )
 
         # 5. Extract fields from ModelPredOut

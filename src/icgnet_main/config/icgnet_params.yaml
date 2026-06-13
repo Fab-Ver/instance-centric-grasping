@@ -21,6 +21,9 @@ icgnet_grasp_node:
 
     # Number of grasps to generate per scene
     n_grasps: 32
+    # Upstream grasp score cull inside ICGNet. 0.0 = disabled (model default is 0.3): every
+    # grasp is returned and ranked/tried high-to-low by the executor, nothing excluded a priori.
+    grasp_score_threshold: 0.0
 
     # Workspace bounding box (world frame, metres).
     # Points outside are removed BEFORE passing to ICGNet. Objects spawn on the
