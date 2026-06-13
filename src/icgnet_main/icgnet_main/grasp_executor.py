@@ -38,6 +38,23 @@ SEMANTIC_CLASSES = {
 }
 CLASS_NAMES = {v: k for k, v in SEMANTIC_CLASSES.items()}
 
+# Per-attempt outcome codes, surfaced in the ExecuteGrasp response for evaluation.
+# Each failure point in the grasp pipeline maps to exactly one code so the
+# evaluation script can build a failure-mode histogram.
+REASON_SUCCESS = 'SUCCESS'
+REASON_PERCEPTION_NO_GRASP = 'PERCEPTION_NO_GRASP'   # ICGNet returned no grasp for the class
+REASON_PREGRASP_PLAN_FAIL = 'PREGRASP_PLAN_FAIL'     # Step 1 joint-space pre-grasp planning failed
+REASON_APPROACH_FAIL = 'APPROACH_FAIL'               # Step 2 Cartesian approach failed (collision/IK)
+REASON_GRASP_MISS = 'GRASP_MISS'                     # Step 3 closed on empty air (gap < min)
+REASON_OBJECT_TIPPED = 'OBJECT_TIPPED'               # Step 3 barely closed (gap > max)
+REASON_LIFT_PLAN_FAIL = 'LIFT_PLAN_FAIL'             # Step 4 Cartesian lift planning failed
+REASON_LIFT_DROP = 'LIFT_DROP'                       # Step 4 object dropped during lift
+REASON_TRANSFER_PLAN_FAIL = 'TRANSFER_PLAN_FAIL'     # Step 5 transfer planning failed
+REASON_TRANSFER_DROP = 'TRANSFER_DROP'               # Step 5 object dropped during transfer
+REASON_LOWER_PLAN_FAIL = 'LOWER_PLAN_FAIL'           # Step 6 lower planning failed
+REASON_LOWER_DROP = 'LOWER_DROP'                     # Step 6 object dropped during lower
+REASON_PLACE_ROLLOUT = 'PLACE_ROLLOUT'              # released but object not in bin (rolled out)
+
 
 
 class GraspExecutorNode(Node):
@@ -240,6 +257,9 @@ class GraspExecutorNode(Node):
         # Evaluation instrumentation: set True when a Cartesian approach move fails
         # (collision / INVALID_MOTION_PLAN proxy).  Reset before each attempt loop.
         self._last_collision_detected = False
+        # Outcome code of the most recent _execute_single_grasp call (side-effect so
+        # the bool return contract used by both single and sweep paths stays intact).
+        self._last_failure_reason = ''
 
         # Multi-object sweep state.  Set when a SceneManifest arrives from scene_manager.
         # While False, every execute_grasp call uses the single-object path (unchanged).
@@ -516,6 +536,8 @@ class GraspExecutorNode(Node):
         res.planning_time = 0.0
         res.execution_time = 0.0
         res.collision_detected = False
+        res.failure_reason = ''
+        res.attempt_reasons = []
 
         self.get_logger().info(
             f"ExecuteGrasp: target='{target}' max_attempts={max_attempts} skip_place={skip_place}"
@@ -569,12 +591,14 @@ class GraspExecutorNode(Node):
         if grasps is None or len(grasps.grasps) == 0:
             res.success = False
             res.target_not_found = True
+            res.failure_reason = REASON_PERCEPTION_NO_GRASP
             res.message = "No grasps received after inference"
             return res
 
         candidates = self._filter_grasps(grasps.grasps, target)
         if not candidates:
             res.target_not_found = True
+            res.failure_reason = REASON_PERCEPTION_NO_GRASP
             available = sorted({CLASS_NAMES.get(g.semantic_class, '?') for g in grasps.grasps})
             res.success = False
             res.message = (
@@ -611,7 +635,10 @@ class GraspExecutorNode(Node):
             )
 
         self._last_collision_detected = False
-        t_exec_start = time.time()
+        # Measure motion duration on the sim clock (use_sim_time=True): wall-clock is
+        # meaningless at low RTF, sim time is the physically relevant motion duration.
+        t_exec_start_ns = self.get_clock().now().nanoseconds
+        attempt_reasons = []
 
         for i, g in enumerate(candidates):
             p = g.pose.position
@@ -622,18 +649,22 @@ class GraspExecutorNode(Node):
                 f"pos=[{p.x:.3f},{p.y:.3f},{p.z:.3f}]"
             )
             if self._execute_single_grasp(g, skip_place=skip_place):
+                attempt_reasons.append(REASON_SUCCESS)
                 self._clear_current_grasp_marker()
                 res.success = True
                 res.grasps_attempted = i + 1
-                res.execution_time = time.time() - t_exec_start
+                res.execution_time = (self.get_clock().now().nanoseconds - t_exec_start_ns) * 1e-9
                 res.collision_detected = self._last_collision_detected
+                res.failure_reason = REASON_SUCCESS
+                res.attempt_reasons = attempt_reasons
                 res.message = f"Grasp succeeded on attempt {i+1}"
                 self.get_logger().info(
                     f"[SUCCESS] Grasp completed on attempt {i+1}/{len(candidates)}"
                 )
                 return res
+            attempt_reasons.append(self._last_failure_reason or 'UNKNOWN')
             self.get_logger().warn(
-                f"[ATTEMPT {i+1}/{len(candidates)}] FAILED — "
+                f"[ATTEMPT {i+1}/{len(candidates)}] FAILED ({attempt_reasons[-1]}) — "
                 f"{'resetting scene and trying next candidate' if i + 1 < len(candidates) else 'no more candidates'}"
             )
             if i + 1 < len(candidates):
@@ -642,8 +673,10 @@ class GraspExecutorNode(Node):
         self._clear_current_grasp_marker()
         res.success = False
         res.grasps_attempted = len(candidates)
-        res.execution_time = time.time() - t_exec_start
+        res.execution_time = (self.get_clock().now().nanoseconds - t_exec_start_ns) * 1e-9
         res.collision_detected = self._last_collision_detected
+        res.attempt_reasons = attempt_reasons
+        res.failure_reason = attempt_reasons[-1] if attempt_reasons else 'UNKNOWN'
         res.message = f"All {len(candidates)} grasp attempts failed"
         return res
 
@@ -1126,6 +1159,7 @@ class GraspExecutorNode(Node):
         ok = self._arm.wait_until_executed()
         dt = time.time() - t0
         if not ok:
+            self._last_failure_reason = REASON_PREGRASP_PLAN_FAIL
             self.get_logger().warn(
                 f"[STEP 1/5] PRE-GRASP FAILED in {dt:.2f}s — aborting this candidate"
             )
@@ -1165,6 +1199,7 @@ class GraspExecutorNode(Node):
         dt = time.time() - t0
         if not ok:
             self._last_collision_detected = True
+            self._last_failure_reason = REASON_APPROACH_FAIL
             self.get_logger().warn(
                 f"[STEP 2/5] APPROACH FAILED in {dt:.2f}s — aborting this candidate"
             )
@@ -1183,6 +1218,7 @@ class GraspExecutorNode(Node):
 
         # OPEN=0.04m, CLOSED=0.0m per finger; threshold 5mm means jaw gap > 10mm total.
         if finger_gap < self._min_finger_gap:
+            self._last_failure_reason = REASON_GRASP_MISS
             self.get_logger().warn(
                 f"[STEP 3/5] Gripper fully closed (gap={finger_gap*1000:.1f}mm < "
                 f"{self._min_finger_gap*1000:.0f}mm) — missed object"
@@ -1190,6 +1226,7 @@ class GraspExecutorNode(Node):
             # CO stays absent: _reset_scene() will re-add it after moving home.
             return self._abort_grasp(target_co_id)
         if finger_gap > self._max_finger_gap:
+            self._last_failure_reason = REASON_OBJECT_TIPPED
             self.get_logger().warn(
                 f"[STEP 3/5] Gripper barely closed (gap={finger_gap*1000:.1f}mm > "
                 f"{self._max_finger_gap*1000:.0f}mm) — object tipped or controller aborted"
@@ -1232,6 +1269,7 @@ class GraspExecutorNode(Node):
         ok = self._arm.wait_until_executed()
         dt = time.time() - t0
         if not ok:
+            self._last_failure_reason = REASON_LIFT_PLAN_FAIL
             self.get_logger().warn(f"[STEP 4/5] LIFT FAILED in {dt:.2f}s")
             if self._use_collision_scene:
                 try:
@@ -1247,6 +1285,7 @@ class GraspExecutorNode(Node):
         # Upper bound removed: valid grasp gap varies by object and oscillates slightly.
         finger_gap_post = self._read_finger_gap_fresh(self._joint_state_fresh_timeout)
         if finger_gap_post < self._min_finger_gap:
+            self._last_failure_reason = REASON_LIFT_DROP
             self.get_logger().warn(
                 f"[STEP 4/5 POST-CHECK] Object dropped during lift "
                 f"(gap={finger_gap_post*1000:.1f}mm < {self._min_finger_gap*1000:.0f}mm)"
@@ -1378,6 +1417,7 @@ class GraspExecutorNode(Node):
                     self.get_logger().warn(f"[SKIP_PLACE] Detach failed (non-fatal): {e}")
             self._active_co_id = None
             self._active_co = None
+            self._last_failure_reason = REASON_SUCCESS
             return True
 
         transfer_pos = [place_x, place_y, self._transport_clear_z]
@@ -1408,6 +1448,7 @@ class GraspExecutorNode(Node):
         self._arm.move_to_pose(position=transfer_pos, quat_xyzw=quat_xyzw, cartesian=False)
         ok = self._arm.wait_until_executed()
         if not ok:
+            self._last_failure_reason = REASON_TRANSFER_PLAN_FAIL
             self.get_logger().warn(
                 f"[STEP 5/7] TRANSFER FAILED in {time.time()-t0:.2f}s — aborting"
             )
@@ -1417,6 +1458,7 @@ class GraspExecutorNode(Node):
 
         gap = self._read_finger_gap_fresh(self._joint_state_fresh_timeout)
         if gap < self._min_finger_gap:
+            self._last_failure_reason = REASON_TRANSFER_DROP
             self.get_logger().warn(
                 f"[STEP 5/7] Object dropped during transfer "
                 f"(gap={gap*1000:.1f}mm < {self._min_finger_gap*1000:.0f}mm) — aborting"
@@ -1441,6 +1483,7 @@ class GraspExecutorNode(Node):
         )
         ok = self._arm.wait_until_executed()
         if not ok:
+            self._last_failure_reason = REASON_LOWER_PLAN_FAIL
             self.get_logger().warn(
                 f"[STEP 6/7] LOWER FAILED in {time.time()-t0:.2f}s — aborting"
             )
@@ -1450,6 +1493,7 @@ class GraspExecutorNode(Node):
 
         gap = self._read_finger_gap_fresh(self._joint_state_fresh_timeout)
         if gap < self._min_finger_gap:
+            self._last_failure_reason = REASON_LOWER_DROP
             self.get_logger().warn(
                 f"[STEP 6/7] Object dropped during lower "
                 f"(gap={gap*1000:.1f}mm < {self._min_finger_gap*1000:.0f}mm) — aborting"
@@ -1505,12 +1549,14 @@ class GraspExecutorNode(Node):
         # Physical success check: verify the object landed in the bin.
         result = self._object_in_bin()
         if result is None:
+            self._last_failure_reason = REASON_SUCCESS
             self.get_logger().warn(
                 "[PLACE] No object pose from /model_poses — physical check skipped "
                 "(bridge not connected). Reporting success by arm motion only."
             )
             return True
         if result:
+            self._last_failure_reason = REASON_SUCCESS
             with self._object_pose_lock:
                 p = self._object_pose
             self.get_logger().info(
@@ -1519,6 +1565,7 @@ class GraspExecutorNode(Node):
                 f"bin=[{place_x:.3f}, {place_y:.3f}] ±{self._bin_footprint/2:.3f})"
             )
             return True
+        self._last_failure_reason = REASON_PLACE_ROLLOUT
         with self._object_pose_lock:
             p = self._object_pose
         self.get_logger().warn(
