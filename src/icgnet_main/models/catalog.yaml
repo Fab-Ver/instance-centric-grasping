@@ -6,11 +6,7 @@
 #
 # Flat models (e.g. bowl, coke_can) live in models/<name>/ and use model:// URIs.
 # Class-subdir models live in models/<class>/<name>/ and are loaded via -file with absolute path.
-mug:
-  class_id: 0
-  models:
-    - bowl         # [mesh] real DAE from Gazebo DB — wide cup/bowl shape
-    - plastic_cup  # [mesh] real DAE from Gazebo DB — tall cup shape
+
 box:
   class_id: 1
   models:
@@ -22,22 +18,19 @@ can:
     - coke_can     # [mesh] real DAE from Gazebo DB — Coca-Cola can with texture
     - beer_can     # [prim] cylinder r=33mm h=105mm
     - soup_can     # [prim] cylinder r=38mm h=100mm
-bottle:
-  class_id: 3
-  models:
-    - water_bottle  # [prim] cylinder r=25mm h=220mm
-    - wine_bottle   # [prim] cylinder r=18mm h=300mm
-cylindric:
-  class_id: 4
-  models:
-    - pringles_can  # [prim] cylinder r=38mm h=220mm
-    - tape_roll     # [prim] cylinder r=40mm h=40mm
+# bottle:
+#  class_id: 3
+#  models:
+#    - water_bottle  # [prim] cylinder r=25mm h=220mm
+#    - wine_bottle   # [prim] cylinder r=18mm h=300mm
+#cylindric:
+#  class_id: 4
+#  models:
+#    - pringles_can  # [prim] cylinder r=38mm h=220mm
+#    - tape_roll     # [prim] cylinder r=40mm h=40mm
 ball:
   class_id: 5
   models:
     - tennis_ball   # [prim] sphere r=38mm (~230cm3), gap=38mm < max_finger_gap=40mm
     - baseball      # [prim] sphere r=39mm (~248cm3), gap=39mm < max_finger_gap=40mm
-other:
-  class_id: 6
-  models:
-    - cordless_drill  # [mesh] real DAE+STL from Gazebo DB — power drill
+

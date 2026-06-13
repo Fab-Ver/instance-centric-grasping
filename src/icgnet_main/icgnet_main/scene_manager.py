@@ -36,8 +36,12 @@ class SceneManagerNode(Node):
         self.declare_parameter('target_class', 'can')
         self.declare_parameter('target_count', 2)
         self.declare_parameter('distractor_count', -1)  # -1 = random choice of 2 or 3
-        self.declare_parameter('spawn_x_min', 0.40)
-        self.declare_parameter('spawn_x_max', 0.80)
+        # x range kept inside the fixed camera's reliable view. Camera at (0.97,0,0.616)
+        # looks back/down (optical axis hits ground ~x=0.575); x>0.70 is the near, grazing
+        # edge of the frustum where Mask3D fails to segment objects (e.g. a can at x=0.80
+        # went undetected). Stay clear of it so every spawned object is seen by ICGNet.
+        self.declare_parameter('spawn_x_min', 0.45)
+        self.declare_parameter('spawn_x_max', 0.70)
         self.declare_parameter('spawn_y_min', -0.30)
         self.declare_parameter('spawn_y_max', 0.30)
         self.declare_parameter('spawn_reach_max', 0.85)

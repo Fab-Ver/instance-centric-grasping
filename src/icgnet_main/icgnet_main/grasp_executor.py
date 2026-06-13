@@ -102,6 +102,10 @@ class GraspExecutorNode(Node):
         self.declare_parameter('place_pre_offset', 0.15)
         self.declare_parameter('bin_footprint', 0.30)
         self.declare_parameter('bin_rim_height', 0.10)
+        # z-margin above the rim for the in-bin check. Generous: objects can pile/tilt
+        # on top of each other in a small bin (two cans stacked ≈ 0.14m centre). Only
+        # guards against the object still hanging from the gripper/arm (z ≈ 0.30+).
+        self.declare_parameter('bin_z_tolerance', 0.20)
         self.declare_parameter('transport_velocity', 0.10)
         self.declare_parameter('transport_acceleration', 0.10)
         self.declare_parameter('transport_clear_z', 0.45)
@@ -134,6 +138,7 @@ class GraspExecutorNode(Node):
         self._place_pre_offset = self.get_parameter('place_pre_offset').get_parameter_value().double_value
         self._bin_footprint = self.get_parameter('bin_footprint').get_parameter_value().double_value
         self._bin_rim_height = self.get_parameter('bin_rim_height').get_parameter_value().double_value
+        self._bin_z_tolerance = self.get_parameter('bin_z_tolerance').get_parameter_value().double_value
         self._transport_velocity = self.get_parameter('transport_velocity').get_parameter_value().double_value
         self._transport_acceleration = self.get_parameter('transport_acceleration').get_parameter_value().double_value
         self._transport_clear_z = self.get_parameter('transport_clear_z').get_parameter_value().double_value
@@ -316,24 +321,20 @@ class GraspExecutorNode(Node):
         """Return True if the tracked object is inside the drop bin footprint.
 
         Returns None when no pose is available (bridge not yet connected).
-        Uses a +5 cm z-margin above the rim to tolerate bounce during settle.
+        Uses bin_z_tolerance above the rim to tolerate piled/tilted objects.
         """
         with self._object_pose_lock:
             pose = self._object_pose
         if pose is None:
             return None
-        half = self._bin_footprint / 2.0
-        in_x = abs(pose.x - self._place_x) <= half
-        in_y = abs(pose.y - self._place_y) <= half
-        in_z = pose.z <= self._bin_rim_height + 0.05
-        return in_x and in_y and in_z
+        return self._pose_in_bin(pose)
 
     def _pose_in_bin(self, pose: Point) -> bool:
         """Return True if pose is within the bin footprint (generalised _object_in_bin)."""
         half = self._bin_footprint / 2.0
         in_x = abs(pose.x - self._place_x) <= half
         in_y = abs(pose.y - self._place_y) <= half
-        in_z = pose.z <= self._bin_rim_height + 0.05
+        in_z = pose.z <= self._bin_rim_height + self._bin_z_tolerance
         return in_x and in_y and in_z
 
     def _reset_scene(self, teleport_object: bool = True):
@@ -833,6 +834,21 @@ class GraspExecutorNode(Node):
                 name for name in target_entity_names
                 if name not in poses_snapshot or not self._pose_in_bin(poses_snapshot[name])
             ]
+            # [BIN_DIAG] log the actual tracked pose of every target vs bin bounds —
+            # distinguishes "stale/high pose" (gz stops publishing static entities on
+            # dynamic_pose/info) from a genuine z/footprint miss.
+            half = self._bin_footprint / 2.0
+            z_max = self._bin_rim_height + self._bin_z_tolerance
+            for name in target_entity_names:
+                p = poses_snapshot.get(name)
+                if p is None:
+                    self.get_logger().warn(f"[BIN_DIAG] {name}: NO POSE in snapshot (entity not tracked)")
+                else:
+                    self.get_logger().info(
+                        f"[BIN_DIAG] {name}: pos=({p.x:.3f},{p.y:.3f},{p.z:.3f}) "
+                        f"in_bin={self._pose_in_bin(p)} "
+                        f"[x|y|±{half:.2f} from ({self._place_x:.2f},{self._place_y:.2f}); z≤{z_max:.2f}]"
+                    )
             if missing:
                 self.get_logger().error(
                     f"[SWEEP] Ground-truth check failed — not in bin: {missing}. Full reset."

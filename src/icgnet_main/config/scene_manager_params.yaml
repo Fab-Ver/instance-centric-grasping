@@ -11,8 +11,10 @@ scene_manager:
     distractor_count: -1
 
     # Spawn workspace bounds in world frame (m).
-    spawn_x_min: 0.40
-    spawn_x_max: 0.80
+    # x_max kept at 0.70: the fixed camera's near/grazing frustum edge (x>~0.70) is where
+    # Mask3D fails to segment objects, leaving them undetected by ICGNet.
+    spawn_x_min: 0.45
+    spawn_x_max: 0.70
     spawn_y_min: -0.30
     spawn_y_max: 0.30
 

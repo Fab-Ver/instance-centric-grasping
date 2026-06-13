@@ -92,6 +92,7 @@ grasp_executor_node:
     # Bin geometry for MoveIt collision object (solid box up to the rim).
     bin_footprint: 0.30    # outer side length (m) — matches drop_bin in world.sdf
     bin_rim_height: 0.10   # wall height = top of MoveIt CO (m)
+    bin_z_tolerance: 0.20  # z-margin above rim for in-bin check — tolerates piled/tilted objects (any pose counts)
 
     # z reached by joint-space transfer move (clears bin rim=0.10 + tallest object ~0.22m).
     # 0.35m gives 13cm clearance over a wine bottle; was 0.45 (over-conservative, no table present).
