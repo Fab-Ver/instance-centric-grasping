@@ -3,6 +3,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetEnvironmentVariable
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -11,6 +12,7 @@ from launch_ros.actions import Node
 def generate_launch_description():
     use_gpu = LaunchConfiguration('use_gpu', default='false')
     headless = LaunchConfiguration('headless', default='true')
+    rviz = LaunchConfiguration('rviz', default='true')
 
     pkg_icgnet_main = get_package_share_directory('icgnet_main')
     pkg_panda = get_package_share_directory('panda_description')
@@ -35,6 +37,15 @@ def generate_launch_description():
         ),
 
         DeclareLaunchArgument(
+            'rviz',
+            default_value='true',
+            description=(
+                'Launch the RViz visualization stack (RViz + scene_visualizer). '
+                'Set false for headless automated runs (e.g. run_evaluation_phase1.py) to speed them up.'
+            ),
+        ),
+
+        DeclareLaunchArgument(
             'use_gpu',
             default_value='false',
             description=(
@@ -54,6 +65,7 @@ def generate_launch_description():
                 'use_sim_time': 'true',
                 'use_gpu': use_gpu,
                 'headless': headless,
+                'rviz': rviz,
             }.items(),
         ),
 
@@ -128,6 +140,7 @@ def generate_launch_description():
             name='scene_visualizer',
             output='screen',
             parameters=[{'use_sim_time': True}],
+            condition=IfCondition(rviz),
         ),
 
         # Object spawn: add objects manually after launch:

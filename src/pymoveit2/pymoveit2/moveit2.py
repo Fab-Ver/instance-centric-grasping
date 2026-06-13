@@ -782,9 +782,15 @@ class MoveIt2:
 
         self._send_goal_async_execute_trajectory(goal=execute_trajectory_goal)
 
-    def wait_until_executed(self) -> bool:
+    def wait_until_executed(self, timeout_sec: Optional[float] = None) -> bool:
         """
         Wait until the previously requested motion is finalised through either a success or failure.
+
+        If `timeout_sec` is given and the motion does not finalise within that wall-clock
+        budget, the execution is cancelled, the internal state is force-reset and False is
+        returned. This guards against trajectory controllers configured with no goal-time
+        abort (e.g. goal_time=0.0), where a goal that never settles would otherwise block
+        this call forever.
         """
 
         if not self.__is_motion_requested:
@@ -793,7 +799,16 @@ class MoveIt2:
             )
             return False
 
+        deadline = None if timeout_sec is None else time.time() + timeout_sec
         while self.__is_motion_requested or self.__is_executing:
+            if deadline is not None and time.time() > deadline:
+                self._node.get_logger().error(
+                    f"wait_until_executed timed out after {timeout_sec:.1f}s — "
+                    "cancelling motion and resetting execution state."
+                )
+                self.cancel_execution()
+                self.force_reset_executing_state()
+                return False
             if self._node.executor is not None:
                 time.sleep(0.1)
             else:

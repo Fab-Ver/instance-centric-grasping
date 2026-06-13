@@ -19,6 +19,7 @@ def generate_launch_description():
     world = LaunchConfiguration('world', default='')
     use_gpu = LaunchConfiguration('use_gpu', default='false')
     headless = LaunchConfiguration('headless', default='true')
+    rviz_enabled = LaunchConfiguration('rviz', default='true')
 
     pkg_panda = get_package_share_directory('panda_description')
     pkg_ros_gz_sim = get_package_share_directory('ros_gz_sim')
@@ -92,6 +93,7 @@ def generate_launch_description():
         output='log',
         arguments=['-d', rviz_config],
         parameters=[{'use_sim_time': True}],
+        condition=IfCondition(rviz_enabled),
     )
 
     # Spawn the robot into gz-sim using the robot_description topic.
@@ -139,6 +141,11 @@ def generate_launch_description():
             'headless',
             default_value='true',
             description='true = server-only (no GUI); false = server + GUI window',
+        ),
+        DeclareLaunchArgument(
+            'rviz',
+            default_value='true',
+            description='Launch RViz. Set false for headless automated runs (e.g. evaluation).',
         ),
         DeclareLaunchArgument(
             'use_gpu',

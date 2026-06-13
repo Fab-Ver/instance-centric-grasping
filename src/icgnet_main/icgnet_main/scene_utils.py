@@ -74,11 +74,20 @@ def visual_geometry_from_sdf(sdf_path: str) -> dict | None:
 
     base = {'offset_xyz': offset_xyz, 'offset_rpy': offset_rpy, 'color_rgba': color_rgba}
 
-    # Mesh: convert model://<head>/... → package://icgnet_main/models/<head>/...
+    # Mesh: build a package:// URI RViz can open.
+    #  - model://<head>/...  (flat models, e.g. coke_can) → package://icgnet_main/models/<head>/...
+    #  - relative URI (GSO models, e.g. 'meshes/model.obj') → resolve against the SDF location
+    #    and rebuild from the 'models/' segment, so any class-subdir layout works too.
     mm = re.search(r'<mesh>.*?<uri>(.*?)</uri>.*?</mesh>', block, re.DOTALL)
     if mm:
         raw_uri = mm.group(1).strip()
-        uri = re.sub(r'^model://([^/]+)/(.*)', r'package://icgnet_main/models/\1/\2', raw_uri)
+        if raw_uri.startswith('model://'):
+            uri = re.sub(r'^model://([^/]+)/(.*)', r'package://icgnet_main/models/\1/\2', raw_uri)
+        else:
+            abs_mesh = os.path.normpath(os.path.join(os.path.dirname(sdf_path), raw_uri))
+            idx = abs_mesh.find(os.sep + 'models' + os.sep)
+            uri = ('package://icgnet_main' + abs_mesh[idx:].replace(os.sep, '/')
+                   if idx != -1 else raw_uri)
         scale = (1.0, 1.0, 1.0)
         sm = re.search(r'<scale>([\d.\s]+)</scale>', block)
         if sm:

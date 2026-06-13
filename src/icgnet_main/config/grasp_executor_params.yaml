@@ -76,6 +76,13 @@ grasp_executor_node:
     # ICGNet with return_meshes=True (marching cubes) on a small GPU takes 20–60 s.
     inference_timeout: 120.0
 
+    # Wall-clock cap per arm/gripper move. The arm JTC has goal_time=0.0 (never aborts),
+    # so a goal that never settles (e.g. unstable HOME from a tilted post-miss pose) would
+    # block wait_until_executed forever and freeze execute_grasp. On timeout the move is
+    # cancelled and reported as failed, keeping unattended batches (evaluation) alive.
+    # Normal moves take ~10 s at low RTF; 60 s leaves ample headroom.
+    move_timeout: 60.0
+
     # ── Pick-and-place (Fase 5) ──────────────────────────────────────────────
     # Drop bin centre in world frame (must match drop_bin pose in icgnet_world.sdf).
     # y=-0.50: outside camera FOV (camera covers y ∈ [-0.35,0.35]) → no cloud pollution.

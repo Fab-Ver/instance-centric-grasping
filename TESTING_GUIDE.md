@@ -211,6 +211,83 @@ ros2 run icgnet_main save_inference --ros-args \
 
 ---
 
+## Phase 1 Evaluation — automated single-object benchmark
+
+`scripts/run_evaluation_phase1.py` drives the full grasp pipeline automatically across many
+runs and one object class at a time (no distractors — multi-object is a documented domain-gap
+limitation). For each run it spawns one object, calls `/icgnet/execute_grasp`, and logs the
+outcome plus the per-attempt failure reason.
+
+### Prerequisites — terminals that must be up
+
+Bring up **T1 + T3-A + T4** (the script handles spawn + grasp itself — you do **not** run T2 or T5):
+
+```bash
+# T1 — simulation. rviz:=false disables the RViz visualization stack (RViz + scene_visualizer)
+# for a fully headless, faster benchmark (gz is already headless by default).
+ros2 launch icgnet_main world.launch.py rviz:=false
+
+# T3-A — GPU inference (REQUIRED: replay only has one saved object, no good for a multi-class run)
+export PYTHONPATH=~/instance-centric-grasping/.venv/lib/python3.12/site-packages:$PYTHONPATH
+ros2 launch icgnet_main icgnet_inference.launch.py
+
+# T4 — grasp executor
+ros2 launch icgnet_main grasp_execution.launch.py
+```
+
+`grasp_executor` triggers `/icgnet/compute_grasps` internally on each `execute_grasp` call, so the
+script never calls `compute_grasps` directly.
+
+**Pre-check (required for ground-truth success):** `/model_poses` must be publishing —
+`_object_in_bin()` reads it to decide success.
+
+```bash
+ros2 topic echo /model_poses --once   # must print a TFMessage
+```
+
+### Run
+
+```bash
+cd ~/instance-centric-grasping
+source /opt/ros/humble/setup.bash && source install/setup.bash
+
+# Default: 6 classes × 20 runs = 120 runs (mug, box, can, bottle, cylindric, ball)
+./scripts/run_evaluation_phase1.py
+
+# Quick subset:
+./scripts/run_evaluation_phase1.py --runs-per-class 5 --classes can ball
+```
+
+| Option | Default | Meaning |
+|--------|---------|---------|
+| `--runs-per-class N` | `20` | runs per object class |
+| `--classes ...` | all 6 catalog classes | which classes to evaluate |
+
+Each class spawns exactly one model from `catalog.yaml` (deterministic, no per-run variance):
+`mug`→threshold_porcelain_coffee_mug, `box`→cardboard_box, `can`→coke_can,
+`bottle`→water_bottle_fuel, `cylindric`→pringles_can, `ball`→tennis_ball.
+
+### Output
+
+- **`log/phase1_results.csv`** — one row per run:
+  `Run_ID, Target_Class, Success, Attempts, First_Attempt, Planning_Time, Execution_Time,
+  Collision_Detected, Target_Not_Found, Failure_Reason, Attempt_Reasons`
+  - `Planning_Time` = ICGNet inference + selection (wall-clock; dominated by GPU inference).
+  - `Execution_Time` = arm/gripper motion on the **sim clock** (wall-clock is meaningless at low RTF).
+  - `Failure_Reason` = run-level outcome code; `Attempt_Reasons` = `;`-joined per-attempt codes.
+- **`log/phase1_summary.txt`** (also echoed to the log at the end): overall + per-class GSR,
+  avg attempts until success, first-attempt rate, and failure-mode histograms (run-level + attempt-level).
+
+**Failure-mode codes** (`Failure_Reason` / `Attempt_Reasons`): `SUCCESS`, `PERCEPTION_NO_GRASP`,
+`PREGRASP_PLAN_FAIL`, `APPROACH_FAIL`, `GRASP_MISS`, `OBJECT_TIPPED`, `LIFT_PLAN_FAIL`, `LIFT_DROP`,
+`TRANSFER_PLAN_FAIL`, `TRANSFER_DROP`, `LOWER_PLAN_FAIL`, `LOWER_DROP`, `PLACE_ROLLOUT`.
+
+> Notes: tall/thin objects (`cylindric`=pringles_can, `bottle`=water_bottle_fuel) are expected to
+> show more `APPROACH_FAIL`/`GRASP_MISS` — read the per-class attempt histogram, not just GSR.
+> CSV is flushed every run, so the file is usable even if the run is interrupted.
+
+---
+
 ## Headless Verification (no GUI required)
 
 After T1 is up, in a separate shell:

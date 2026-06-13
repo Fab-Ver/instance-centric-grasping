@@ -144,6 +144,11 @@ class GraspExecutorNode(Node):
         self.declare_parameter('allowed_planning_time', 5.0)
         self.declare_parameter('num_planning_attempts', 10)
         self.declare_parameter('inference_timeout', 120.0)
+        # Wall-clock cap per arm/gripper move. The arm JTC runs with goal_time=0.0 (never
+        # aborts), so a goal that never settles would block wait_until_executed forever and
+        # freeze the whole execute_grasp callback. On timeout the move is cancelled and
+        # treated as a failure, so an unattended batch (run_evaluation_phase1.py) keeps going.
+        self.declare_parameter('move_timeout', 60.0)
         self.declare_parameter('bin_slot_spacing', 0.12)
         self.declare_parameter('reset_scene_service', '/icgnet/reset_scene')
 
@@ -175,6 +180,7 @@ class GraspExecutorNode(Node):
         self._allowed_planning_time = self.get_parameter('allowed_planning_time').get_parameter_value().double_value
         self._num_planning_attempts = self.get_parameter('num_planning_attempts').get_parameter_value().integer_value
         self._inference_timeout = self.get_parameter('inference_timeout').get_parameter_value().double_value
+        self._move_timeout = self.get_parameter('move_timeout').get_parameter_value().double_value
         self._bin_slot_spacing = self.get_parameter('bin_slot_spacing').get_parameter_value().double_value
         self._reset_scene_svc_name = self.get_parameter('reset_scene_service').get_parameter_value().string_value
 
@@ -359,14 +365,14 @@ class GraspExecutorNode(Node):
 
         self.get_logger().info('[RESET] Opening gripper...')
         self._gripper.open()
-        self._gripper.wait_until_executed()
+        self._gripper.wait_until_executed(self._move_timeout)
 
         self.get_logger().info('[RESET] Moving arm to home...')
         self._arm.move_to_configuration(
             joint_positions=HOME_JOINT_POSITIONS,
             joint_names=robot.joint_names(),
         )
-        ok = self._arm.wait_until_executed()
+        ok = self._arm.wait_until_executed(self._move_timeout)
         if ok:
             self.get_logger().info('[RESET] Arm at home.')
         else:
@@ -432,7 +438,7 @@ class GraspExecutorNode(Node):
 
         self.get_logger().info('[FULL RESET] Opening gripper...')
         self._gripper.open()
-        self._gripper.wait_until_executed()
+        self._gripper.wait_until_executed(self._move_timeout)
 
         self.get_logger().info('[FULL RESET] Moving arm to home...')
         self._arm.max_velocity = self._arm_default_velocity
@@ -440,7 +446,7 @@ class GraspExecutorNode(Node):
         self._arm.move_to_configuration(
             joint_positions=HOME_JOINT_POSITIONS, joint_names=robot.joint_names()
         )
-        ok = self._arm.wait_until_executed()
+        ok = self._arm.wait_until_executed(self._move_timeout)
         self.get_logger().info(f'[FULL RESET] Arm at home: {ok}')
 
         self._active_co_id = None
@@ -476,7 +482,7 @@ class GraspExecutorNode(Node):
 
         self.get_logger().info('[PARTIAL RESET] Opening gripper...')
         self._gripper.open()
-        self._gripper.wait_until_executed()
+        self._gripper.wait_until_executed(self._move_timeout)
 
         self.get_logger().info('[PARTIAL RESET] Moving arm to home...')
         self._arm.max_velocity = self._arm_default_velocity
@@ -484,7 +490,7 @@ class GraspExecutorNode(Node):
         self._arm.move_to_configuration(
             joint_positions=HOME_JOINT_POSITIONS, joint_names=robot.joint_names()
         )
-        ok = self._arm.wait_until_executed()
+        ok = self._arm.wait_until_executed(self._move_timeout)
         self.get_logger().info(f'[PARTIAL RESET] Arm at home: {ok}')
 
         self._active_co_id = None
@@ -538,6 +544,7 @@ class GraspExecutorNode(Node):
         res.collision_detected = False
         res.failure_reason = ''
         res.attempt_reasons = []
+        res.detected_classes = []
 
         self.get_logger().info(
             f"ExecuteGrasp: target='{target}' max_attempts={max_attempts} skip_place={skip_place}"
@@ -587,6 +594,14 @@ class GraspExecutorNode(Node):
 
         res.planning_time = time.time() - t_plan_start
         res.target_not_found = False
+
+        # Per-instance class labels ICGNet detected this run, from the full GraspArray
+        # BEFORE class filtering — logged for true-class vs detected-classes confusion.
+        if grasps is not None:
+            inst_cls = {}
+            for g in grasps.grasps:
+                inst_cls.setdefault(g.instance_id, g.semantic_class)
+            res.detected_classes = [CLASS_NAMES.get(inst_cls[i], '?') for i in sorted(inst_cls)]
 
         if grasps is None or len(grasps.grasps) == 0:
             res.success = False
@@ -1144,7 +1159,7 @@ class GraspExecutorNode(Node):
                 f"(ICGNet={icgnet_opening*1000:.1f}mm, per finger={per_finger_pos*1000:.1f}mm){width_note}"
             )
         self._gripper.move_to_position(per_finger_pos)
-        self._gripper.wait_until_executed()
+        self._gripper.wait_until_executed(self._move_timeout)
 
         # ── Step 0: update collision scene ───────────────────────────────────
         if self._use_collision_scene:
@@ -1156,7 +1171,7 @@ class GraspExecutorNode(Node):
         )
         t0 = time.time()
         self._arm.move_to_pose(position=pre_pos, quat_xyzw=quat_xyzw)
-        ok = self._arm.wait_until_executed()
+        ok = self._arm.wait_until_executed(self._move_timeout)
         dt = time.time() - t0
         if not ok:
             self._last_failure_reason = REASON_PREGRASP_PLAN_FAIL
@@ -1195,7 +1210,7 @@ class GraspExecutorNode(Node):
             cartesian=True, cartesian_max_step=self._cartesian_max_step_approach,
             cartesian_fraction_threshold=self._cartesian_fraction_threshold,
         )
-        ok = self._arm.wait_until_executed()
+        ok = self._arm.wait_until_executed(self._move_timeout)
         dt = time.time() - t0
         if not ok:
             self._last_collision_detected = True
@@ -1210,7 +1225,7 @@ class GraspExecutorNode(Node):
         # ── Step 3/5: close gripper + verify grasp ────────────────────────────
         self.get_logger().info("[STEP 3/5] CLOSING GRIPPER")
         self._gripper.close()
-        self._gripper.wait_until_executed()
+        self._gripper.wait_until_executed(self._move_timeout)
         # Demand a fresh joint_state: wall-clock sleep is meaningless at low RTF (e.g. 0.03).
         # At RTF 0.03 the broadcaster runs at 50 Hz sim ≈ 1.5 msg/s wall; 0.5s sleep
         # would read a state from before the gripper command settled.
@@ -1266,7 +1281,7 @@ class GraspExecutorNode(Node):
             cartesian=True, cartesian_max_step=self._cartesian_max_step_approach,
             cartesian_fraction_threshold=self._cartesian_fraction_threshold,
         )
-        ok = self._arm.wait_until_executed()
+        ok = self._arm.wait_until_executed(self._move_timeout)
         dt = time.time() - t0
         if not ok:
             self._last_failure_reason = REASON_LIFT_PLAN_FAIL
@@ -1405,7 +1420,7 @@ class GraspExecutorNode(Node):
             self._arm.move_to_configuration(
                 joint_positions=HOME_JOINT_POSITIONS, joint_names=robot.joint_names()
             )
-            ok = self._arm.wait_until_executed()
+            ok = self._arm.wait_until_executed(self._move_timeout)
             self.get_logger().info(
                 f"[STEP 5/5] Home {'reached' if ok else 'FAILED'} in {time.time()-t0:.2f}s"
             )
@@ -1446,7 +1461,7 @@ class GraspExecutorNode(Node):
         )
         t0 = time.time()
         self._arm.move_to_pose(position=transfer_pos, quat_xyzw=quat_xyzw, cartesian=False)
-        ok = self._arm.wait_until_executed()
+        ok = self._arm.wait_until_executed(self._move_timeout)
         if not ok:
             self._last_failure_reason = REASON_TRANSFER_PLAN_FAIL
             self.get_logger().warn(
@@ -1481,7 +1496,7 @@ class GraspExecutorNode(Node):
             cartesian_max_step=self._cartesian_max_step_approach,
             cartesian_fraction_threshold=0.3,
         )
-        ok = self._arm.wait_until_executed()
+        ok = self._arm.wait_until_executed(self._move_timeout)
         if not ok:
             self._last_failure_reason = REASON_LOWER_PLAN_FAIL
             self.get_logger().warn(
@@ -1504,7 +1519,7 @@ class GraspExecutorNode(Node):
         # ── Step 7/7: open gripper → release object ────────────────────────────
         self.get_logger().info("[STEP 7/7] RELEASING OBJECT")
         self._gripper.open()
-        self._gripper.wait_until_executed()
+        self._gripper.wait_until_executed(self._move_timeout)
         # Accumulate N fresh joint_state messages so the object has sim-time to fall
         # free before the retract move. RTF-independent: each call waits for one
         # broadcaster tick at 50 Hz sim (~release_settle_states * 20ms sim = 0.4s sim).
@@ -1529,7 +1544,7 @@ class GraspExecutorNode(Node):
             cartesian_max_step=self._cartesian_max_step_approach,
             cartesian_fraction_threshold=self._cartesian_fraction_threshold,
         )
-        ok = self._arm.wait_until_executed()
+        ok = self._arm.wait_until_executed(self._move_timeout)
         if not ok:
             self.get_logger().warn("[RETRACT] Retract failed (non-fatal) — proceeding to HOME")
 
@@ -1541,7 +1556,7 @@ class GraspExecutorNode(Node):
         self._arm.move_to_configuration(
             joint_positions=HOME_JOINT_POSITIONS, joint_names=robot.joint_names()
         )
-        ok = self._arm.wait_until_executed()
+        ok = self._arm.wait_until_executed(self._move_timeout)
         self.get_logger().info(
             f"[HOME] {'Reached' if ok else 'FAILED'} in {time.time()-t0:.2f}s"
         )

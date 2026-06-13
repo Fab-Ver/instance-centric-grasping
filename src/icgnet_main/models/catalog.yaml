@@ -27,7 +27,9 @@ can:
 bottle:
   class_id: 3
   models:
-    - water_bottle_fuel  # [mesh] realistic glb model from Gazebo Fuel
+    - cajun_tonic_bottle  # [mesh .obj] GSO from Gazebo Fuel (Weston Cajun Jerky Tonic, 12 fl oz)
+    # water_bottle_fuel removed: its .glb mesh is NOT supported by gz-sim Fortress
+    # ("Invalid mesh filename extension"). Replaced with this .obj-based GSO model.
 
 cylindric:
   class_id: 4

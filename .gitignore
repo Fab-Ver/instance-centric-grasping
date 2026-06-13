@@ -6,6 +6,8 @@
 *.ko
 *.obj
 *.elf
+# Exception: 3D mesh assets under models/ are geometry, not compiled object files.
+!src/icgnet_main/models/**/*.obj
 
 # Linker output
 *.ilk

@@ -12,3 +12,4 @@ bool collision_detected   # true if any Cartesian approach move failed (collisio
 bool target_not_found     # true if ICGNet returned no grasps for the target class
 string failure_reason     # run-level outcome code: 'SUCCESS' | last failed attempt's code | 'PERCEPTION_NO_GRASP'
 string[] attempt_reasons  # per-attempt outcome code (one entry per attempt; the successful one = 'SUCCESS')
+string[] detected_classes # ICGNet class label per detected instance (pre class-filter), for class-confusion logging
