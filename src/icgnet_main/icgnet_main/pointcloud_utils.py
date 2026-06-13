@@ -11,6 +11,10 @@ class PointCloudConfig:
     std_ratio: float = 2.0
     normal_radius_factor: float = 5.0
     normal_max_nn: int = 30
+    # Gentle radius outlier (kills flying pixels without thinning surfaces). Used by
+    # process_point_cloud_dual on the dense segmentation cloud. nb_points<=0 disables.
+    radius_outlier_nb_points: int = 15
+    radius_outlier_radius: float = 0.005
 
 
 def gripper_keypoints_world(
@@ -118,6 +122,75 @@ def process_point_cloud(
     )
 
     return np.asarray(pcd.points), np.asarray(pcd.normals)
+
+
+def _estimate_and_orient_normals(pcd, config: PointCloudConfig, camera_position: np.ndarray):
+    import open3d as o3d
+    pcd.estimate_normals(
+        search_param=o3d.geometry.KDTreeSearchParamHybrid(
+            radius=config.voxel_size * config.normal_radius_factor,
+            max_nn=config.normal_max_nn,
+        )
+    )
+    pcd.orient_normals_towards_camera_location(
+        np.array(camera_position, dtype=np.float64)
+    )
+
+
+def process_point_cloud_dual(
+    points_np: np.ndarray,
+    config: PointCloudConfig,
+    camera_position: np.ndarray,
+    workspace_bounds: dict | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Produce two clouds, mirroring the ICGNet reference demo (scripts/show.py):
+
+    - segmentation cloud: full-resolution (crop + gentle radius outlier, no voxel
+      downsample). Fed to the Mask3D encoder — instance separation needs dense input.
+    - grasp cloud: the segmentation cloud voxel-downsampled to ``voxel_size`` (3mm).
+      Used only for grasp-point sampling.
+
+    The model internally voxel-quantizes the segmentation cloud, but feeding it the
+    full cloud (vs a pre-downsampled one) gives complete voxel occupancy and cleaner
+    per-voxel coordinates (scatter_mean), which is what the model was trained on.
+
+    Returns (seg_pts, seg_normals, grasp_pts, grasp_normals).
+    """
+    empty = np.array([]).reshape(0, 3)
+    if points_np.shape[0] == 0:
+        return empty, empty, empty, empty
+
+    if workspace_bounds is not None:
+        points_np = crop_to_workspace(points_np, workspace_bounds)
+        if points_np.shape[0] == 0:
+            return empty, empty, empty, empty
+
+    import open3d as o3d
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(points_np)
+
+    # Gentle radius outlier on the dense cloud (no aggressive statistical filter —
+    # the reference demo feeds an essentially raw cloud to the encoder).
+    if config.radius_outlier_nb_points > 0:
+        pcd, _ = pcd.remove_radius_outlier(
+            nb_points=config.radius_outlier_nb_points,
+            radius=config.radius_outlier_radius,
+        )
+        if len(pcd.points) == 0:
+            return empty, empty, empty, empty
+
+    # Dense segmentation cloud.
+    _estimate_and_orient_normals(pcd, config, camera_position)
+    seg_pts = np.asarray(pcd.points)
+    seg_normals = np.asarray(pcd.normals)
+
+    # Sparse grasp cloud (voxel downsample of the dense cloud).
+    grasp_pcd = pcd.voxel_down_sample(voxel_size=config.voxel_size)
+    _estimate_and_orient_normals(grasp_pcd, config, camera_position)
+    grasp_pts = np.asarray(grasp_pcd.points)
+    grasp_normals = np.asarray(grasp_pcd.normals)
+
+    return seg_pts, seg_normals, grasp_pts, grasp_normals
 
 
 def to_torch_tensors(

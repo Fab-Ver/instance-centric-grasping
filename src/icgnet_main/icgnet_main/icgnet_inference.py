@@ -44,14 +44,21 @@ class ICGNetPredictor:
         self,
         points: np.ndarray,
         normals: np.ndarray,
+        grasp_points: np.ndarray | None = None,
+        grasp_normals: np.ndarray | None = None,
         n_grasps: int = 64,
         return_meshes: bool = False,
     ) -> Any:
         """
         Run inference on the given point cloud.
 
-        :param points: numpy array (N, 3) of point positions.
-        :param normals: numpy array (N, 3) of point normals.
+        :param points: numpy array (N, 3) — dense cloud fed to the Mask3D encoder
+                       (segmentation + reconstruction). Density matters for instance
+                       separation, so this should NOT be voxel-downsampled.
+        :param normals: numpy array (N, 3) of normals for ``points``.
+        :param grasp_points: numpy array (M, 3) — sparse cloud used only for grasp-point
+                       sampling. Defaults to ``points`` if None (legacy single-cloud mode).
+        :param grasp_normals: normals for ``grasp_points`` (defaults to ``normals``).
         :param n_grasps: number of grasps to generate.
         :param return_meshes: if True, run marching cubes per instance and populate
                               ModelPredOut.reconstructions (list of trimesh.Trimesh).
@@ -61,6 +68,12 @@ class ICGNetPredictor:
         from .pointcloud_utils import to_torch_tensors
 
         pts_t, nrm_t = to_torch_tensors(points, normals, device=self.device)
+        if grasp_points is None:
+            grasp_pts_t, grasp_nrm_t = pts_t, nrm_t
+        else:
+            grasp_pts_t, grasp_nrm_t = to_torch_tensors(
+                grasp_points, grasp_normals, device=self.device
+            )
 
         _logger.info(f"Running inference on {pts_t.shape[0]} points (return_meshes={return_meshes})...")
 
@@ -68,8 +81,8 @@ class ICGNetPredictor:
             output = self.model(
                 pts_t,
                 normals=nrm_t,
-                grasp_pts=pts_t,
-                grasp_normals=nrm_t,
+                grasp_pts=grasp_pts_t,
+                grasp_normals=grasp_nrm_t,
                 n_grasps=n_grasps,
                 each_object=True,
                 return_meshes=return_meshes,

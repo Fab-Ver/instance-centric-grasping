@@ -21,7 +21,7 @@ from icgnet_msgs.msg import Grasp, GraspArray
 
 from .icgnet_inference import ICGNetPredictor
 from .pointcloud_utils import (
-    PointCloudConfig, gripper_keypoints_world, pointcloud2_to_numpy, process_point_cloud,
+    PointCloudConfig, gripper_keypoints_world, pointcloud2_to_numpy, process_point_cloud_dual,
 )
 
 
@@ -200,6 +200,17 @@ class ICGNetGraspNode(Node):
             PointCloud2, '/icgnet/preprocessed_cloud', 10
         )
         self.rich_pub = self.create_publisher(GraspArray, '/icgnet/grasps_rich', 10)
+        # Raw per-instance reconstruction meshes (marching cubes, pre-hull/pre-clip) as
+        # TRIANGLE_LIST markers — lets RViz show exactly what ICGNet reconstructs/segments.
+        # TRANSIENT_LOCAL so a late-joining RViz still gets the last meshes.
+        recon_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self._recon_marker_pub = self.create_publisher(
+            MarkerArray, '/icgnet/reconstruction_meshes', recon_qos
+        )
 
         # ── Collision object publisher (MoveIt2 planning scene) ──────────────
         self._publish_co = self.get_parameter('publish_collision_objects').get_parameter_value().bool_value
@@ -348,6 +359,54 @@ class ICGNetGraspNode(Node):
                         'Possible Mask3D under-segmentation or convex-hull inflation.'
                     )
 
+    def _publish_reconstruction_markers(self, reconstructions: list, frame_id: str):
+        """Publish raw per-instance reconstruction meshes as TRIANGLE_LIST markers.
+
+        Shows the actual marching-cubes surface (no convex hull, no bin clip) so the
+        segmentation quality is directly visible in RViz — one solid colour per instance.
+        """
+        # Distinct, semi-transparent colours per instance (RGBA), cycled.
+        palette = [
+            (0.90, 0.10, 0.10), (0.10, 0.70, 0.20), (0.10, 0.30, 0.90),
+            (0.90, 0.70, 0.10), (0.70, 0.10, 0.80), (0.10, 0.80, 0.80),
+        ]
+        now = self.get_clock().now().to_msg()
+        ma = MarkerArray()
+
+        clear = Marker()
+        clear.header.frame_id = frame_id
+        clear.header.stamp = now
+        clear.action = Marker.DELETEALL
+        ma.markers.append(clear)
+
+        for idx, item in enumerate(reconstructions):
+            mesh, inst_id = item if isinstance(item, tuple) else (item, idx)
+            if len(mesh.faces) == 0:
+                continue
+            r, g, b = palette[idx % len(palette)]
+            m = Marker()
+            m.header.frame_id = frame_id
+            m.header.stamp = now
+            m.ns = 'icgnet_reconstruction'
+            m.id = int(inst_id)
+            m.type = Marker.TRIANGLE_LIST
+            m.action = Marker.ADD
+            m.pose.orientation.w = 1.0
+            m.scale.x = m.scale.y = m.scale.z = 1.0
+            m.color.r, m.color.g, m.color.b, m.color.a = r, g, b, 0.85
+            verts = mesh.vertices
+            for f in mesh.faces:
+                for vi in (int(f[0]), int(f[1]), int(f[2])):
+                    v = verts[vi]
+                    m.points.append(Point(x=float(v[0]), y=float(v[1]), z=float(v[2])))
+            ma.markers.append(m)
+
+        self._recon_marker_pub.publish(ma)
+        self.get_logger().info(
+            f"[RECON_VIZ] Published {len(ma.markers) - 1} reconstruction mesh marker(s) "
+            f"on /icgnet/reconstruction_meshes."
+        )
+
     def _compute_grasps_cb(self, _req, response):
         if self.predictor is None:
             response.success = False
@@ -417,23 +476,33 @@ class ICGNetGraspNode(Node):
                 points_world = points_world[~in_bin]
                 self.get_logger().info(f"Bin exclusion: removed {n_removed} points.")
 
-        pts, normals = process_point_cloud(
+        # Dense cloud → Mask3D encoder (segmentation needs density); sparse cloud → grasp
+        # sampling. Mirrors the ICGNet reference demo (full cloud to encoder, downsample
+        # only the grasp branch).
+        seg_pts, seg_normals, grasp_pts, grasp_normals = process_point_cloud_dual(
             points_world,
             config=self._pc_config,
             camera_position=camera_pos_world,
             workspace_bounds=self.workspace_bounds,
         )
-        if pts.shape[0] < MIN_POINTS_FOR_INFERENCE:
-            raise RuntimeError(f"Too few points after preprocessing: {pts.shape[0]}")
+        if seg_pts.shape[0] < MIN_POINTS_FOR_INFERENCE:
+            raise RuntimeError(f"Too few points after preprocessing: {seg_pts.shape[0]}")
 
-        self.get_logger().info(f"Preprocessing: {raw_points.shape[0]} → {pts.shape[0]} points")
+        self.get_logger().info(
+            f"Preprocessing: {raw_points.shape[0]} → seg={seg_pts.shape[0]} (encoder), "
+            f"grasp={grasp_pts.shape[0]} (sampling) points"
+        )
 
-        # 3b. Publish preprocessed cloud for debugging in RViz
-        cloud_msg = _numpy_to_pointcloud2(pts, self.target_frame, self.get_clock().now().to_msg())
+        # 3b. Publish the dense segmentation cloud for debugging in RViz (what Mask3D sees)
+        cloud_msg = _numpy_to_pointcloud2(seg_pts, self.target_frame, self.get_clock().now().to_msg())
         self.preprocessed_cloud_pub.publish(cloud_msg)
 
         do_meshes = self._publish_co and self.get_parameter('return_meshes').get_parameter_value().bool_value
-        output = self.predictor.predict(pts, normals, n_grasps=self.n_grasps, return_meshes=do_meshes)
+        output = self.predictor.predict(
+            seg_pts, seg_normals,
+            grasp_points=grasp_pts, grasp_normals=grasp_normals,
+            n_grasps=self.n_grasps, return_meshes=do_meshes,
+        )
 
         # 5. Extract fields from ModelPredOut
         # scene_grasp_poses: [rot(G,3,3), centers(G,3), scores(G,), widths(G,), inst_ids(G,)]
@@ -476,6 +545,8 @@ class ICGNetGraspNode(Node):
                 self.get_logger().info(
                     f"[RECON] inst_{inst_id} → class={CLASS_NAMES.get(cls_id, '?')} (id={cls_id})"
                 )
+            # Visualise raw reconstruction meshes in RViz (one colour per instance).
+            self._publish_reconstruction_markers(output.reconstructions, self.target_frame)
 
         # Log per-instance classification summary.
         unique_insts = np.unique(inst_ids.astype(int))
