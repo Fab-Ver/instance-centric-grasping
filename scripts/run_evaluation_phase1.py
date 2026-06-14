@@ -255,7 +255,7 @@ def main():
     node = EvaluatorPhase1()
 
     csv_path, summary_path, inference_dump, grasping_dump = resolve_output_paths(
-        'report', args.runs_per_class, args.classes, args.mode)
+        'results/tests', args.runs_per_class, args.classes, args.mode)
     node.get_logger().info(
         f'Writing results to {csv_path}\n  inference dump: {inference_dump}\n'
         f'  grasping dump:  {grasping_dump}')

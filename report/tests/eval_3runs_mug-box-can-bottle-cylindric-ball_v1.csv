@@ -1,0 +1,6 @@
+Run_ID,Target_Class,Detected_Classes,Success,Attempts,First_Attempt,Planning_Time,Execution_Time,Collision_Detected,Target_Not_Found,Failure_Reason,Attempt_Reasons,Attempt_Scores
+1,mug,box;ball;cylindric,0,0,0,30.51,0.0,0,1,PERCEPTION_NO_GRASP,,
+2,mug,box;ball;ball;ball,0,0,0,16.6,0.0,0,1,PERCEPTION_NO_GRASP,,
+3,mug,box;box;ball,0,0,0,21.87,0.0,0,1,PERCEPTION_NO_GRASP,,
+4,box,box,1,1,1,7.63,15.09,0,0,SUCCESS,SUCCESS,0.444
+5,box,box,0,5,0,6.57,46.07,0,0,GRASP_MISS,TRANSFER_PLAN_FAIL;GRASP_MISS;GRASP_MISS;GRASP_MISS;GRASP_MISS,0.427;0.419;0.416;0.414;0.409
