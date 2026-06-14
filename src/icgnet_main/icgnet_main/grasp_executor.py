@@ -14,6 +14,8 @@ from moveit_msgs.msg import (
     CollisionObject, PlanningScene, PlanningSceneComponents,
 )
 from moveit_msgs.srv import GetPlanningScene
+from control_msgs.action import FollowJointTrajectory
+from rclpy.action import ActionClient
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.executors import MultiThreadedExecutor
@@ -21,9 +23,10 @@ from rclpy.node import Node
 from scipy.spatial.transform import Rotation
 from std_msgs.msg import ColorRGBA
 from std_srvs.srv import Trigger
+from trajectory_msgs.msg import JointTrajectoryPoint
 from visualization_msgs.msg import Marker, MarkerArray
 
-from pymoveit2 import MoveIt2, MoveIt2Gripper
+from pymoveit2 import MoveIt2
 from pymoveit2.robots import panda as robot
 
 from icgnet_msgs.msg import GraspArray, SceneManifest
@@ -55,6 +58,7 @@ REASON_TRANSFER_DROP = 'TRANSFER_DROP'               # Step 5 object dropped dur
 REASON_LOWER_PLAN_FAIL = 'LOWER_PLAN_FAIL'           # Step 6 lower planning failed
 REASON_LOWER_DROP = 'LOWER_DROP'                     # Step 6 object dropped during lower
 REASON_PLACE_ROLLOUT = 'PLACE_ROLLOUT'              # released but object not in bin (rolled out)
+REASON_RELEASE_FAIL = 'RELEASE_FAIL'                # Step 7 gripper never opened, object stayed jammed
 
 
 
@@ -134,7 +138,7 @@ class GraspExecutorNode(Node):
         self.declare_parameter('collision_id_prefix', 'icgnet_inst_')
         self.declare_parameter('finger_safety_margin', 0.01)
         self.declare_parameter('max_finger_pos', 0.04)
-        self.declare_parameter('release_settle_states', 20)
+        self.declare_parameter('release_settle_states', 30)
         self.declare_parameter('min_finger_gap', 0.005)
         self.declare_parameter('max_finger_gap', 0.036)
         self.declare_parameter('executor_threads', 4)
@@ -150,6 +154,19 @@ class GraspExecutorNode(Node):
         # freeze the whole execute_grasp callback. On timeout the move is cancelled and
         # treated as a failure, so an unattended batch (run_evaluation_phase1.py) keeps going.
         self.declare_parameter('move_timeout', 60.0)
+        # Gripper is commanded directly via this controller action (no OMPL planning).
+        self.declare_parameter('gripper_controller_action', '/panda_hand_controller/follow_joint_trajectory')
+        # Trajectory duration for an open/close command; the hand PID holds force afterwards.
+        # 1.0 s (not 0.6): the release at STEP 7 opens FROM an active grasp, so the effort
+        # PID's integral term (charged toward closing) must invert before the fingers move.
+        # A "cold" open at reset completes instantly, but the under-load open needs the time.
+        self.declare_parameter('gripper_move_duration', 1.0)
+        # On release we always want the gripper FULLY open, regardless of object size, so the
+        # release is judged on an ABSOLUTE target: gap >= open_pos - release_open_tolerance.
+        # (The hand controller reports SUCCEEDED even when the fingers barely move —
+        # goal_tolerance=0.04 > full stroke — so verify the actual opening explicitly.)
+        self.declare_parameter('release_open_tolerance', 0.003)
+        self.declare_parameter('max_release_retries', 2)
         self.declare_parameter('bin_slot_spacing', 0.12)
         self.declare_parameter('reset_scene_service', '/icgnet/reset_scene')
 
@@ -182,6 +199,10 @@ class GraspExecutorNode(Node):
         self._num_planning_attempts = self.get_parameter('num_planning_attempts').get_parameter_value().integer_value
         self._inference_timeout = self.get_parameter('inference_timeout').get_parameter_value().double_value
         self._move_timeout = self.get_parameter('move_timeout').get_parameter_value().double_value
+        self._gripper_controller_action = self.get_parameter('gripper_controller_action').get_parameter_value().string_value
+        self._gripper_move_duration = self.get_parameter('gripper_move_duration').get_parameter_value().double_value
+        self._release_open_tolerance = self.get_parameter('release_open_tolerance').get_parameter_value().double_value
+        self._max_release_retries = self.get_parameter('max_release_retries').get_parameter_value().integer_value
         self._bin_slot_spacing = self.get_parameter('bin_slot_spacing').get_parameter_value().double_value
         self._reset_scene_svc_name = self.get_parameter('reset_scene_service').get_parameter_value().string_value
 
@@ -207,12 +228,17 @@ class GraspExecutorNode(Node):
         self._arm.num_planning_attempts = self._num_planning_attempts
         self._arm.cartesian_jump_threshold = 0.0
 
-        self._gripper = MoveIt2Gripper(
-            node=self,
-            gripper_joint_names=robot.gripper_joint_names(),
-            open_gripper_joint_positions=robot.OPEN_GRIPPER_JOINT_POSITIONS,
-            closed_gripper_joint_positions=robot.CLOSED_GRIPPER_JOINT_POSITIONS,
-            gripper_group_name=robot.MOVE_GROUP_GRIPPER,
+        # Gripper driven by a DIRECT FollowJointTrajectory goal to the hand controller,
+        # bypassing MoveGroup/OMPL. Planning the gripper through OMPL fails ("Planning
+        # failed! Error code: FAILURE") whenever a collision object — e.g. an over-segmented
+        # phantom instance — overlaps the fingers at the closed pose, so the gripper never
+        # closes and the gap-check yields a false positive. Commanding the joints directly
+        # + the hand PID gives the friction grasp regardless of scene collisions.
+        self._gripper_joint_names = robot.gripper_joint_names()
+        self._gripper_open_pos = robot.OPEN_GRIPPER_JOINT_POSITIONS[0]
+        self._gripper_closed_pos = robot.CLOSED_GRIPPER_JOINT_POSITIONS[0]
+        self._gripper_traj_client = ActionClient(
+            self, FollowJointTrajectory, self._gripper_controller_action,
             callback_group=cb_gripper,
         )
 
@@ -365,8 +391,7 @@ class GraspExecutorNode(Node):
             time.sleep(0.15)  # let move_group process REMOVE before planning
 
         self.get_logger().info('[RESET] Opening gripper...')
-        self._gripper.open()
-        self._gripper.wait_until_executed(self._move_timeout)
+        self._gripper_open()
 
         self.get_logger().info('[RESET] Moving arm to home...')
         self._arm.move_to_configuration(
@@ -438,8 +463,7 @@ class GraspExecutorNode(Node):
             time.sleep(0.15)
 
         self.get_logger().info('[FULL RESET] Opening gripper...')
-        self._gripper.open()
-        self._gripper.wait_until_executed(self._move_timeout)
+        self._gripper_open()
 
         self.get_logger().info('[FULL RESET] Moving arm to home...')
         self._arm.max_velocity = self._arm_default_velocity
@@ -482,8 +506,7 @@ class GraspExecutorNode(Node):
             time.sleep(0.15)
 
         self.get_logger().info('[PARTIAL RESET] Opening gripper...')
-        self._gripper.open()
-        self._gripper.wait_until_executed(self._move_timeout)
+        self._gripper_open()
 
         self.get_logger().info('[PARTIAL RESET] Moving arm to home...')
         self._arm.max_velocity = self._arm_default_velocity
@@ -1170,6 +1193,44 @@ class GraspExecutorNode(Node):
             time.sleep(0.02)
         return True
 
+    def _gripper_move_to(self, per_finger_pos: float, label: str) -> bool:
+        """Command both finger joints to per_finger_pos via a direct FollowJointTrajectory
+        goal to the hand controller, bypassing MoveGroup/OMPL (whose collision check on the
+        closed pose fails against phantom collision objects). The hand PID then holds the
+        commanded position, providing the friction grasp. Returns True if the controller
+        accepted and finished the goal within move_timeout; the actual grasp is still
+        verified downstream via the finger-gap check."""
+        if not self._gripper_traj_client.wait_for_server(timeout_sec=2.0):
+            self.get_logger().warn(f"[GRIPPER] {label}: controller action server unavailable")
+            return False
+        goal = FollowJointTrajectory.Goal()
+        goal.trajectory.joint_names = list(self._gripper_joint_names)
+        point = JointTrajectoryPoint()
+        point.positions = [float(per_finger_pos)] * len(self._gripper_joint_names)
+        sec = int(self._gripper_move_duration)
+        point.time_from_start.sec = sec
+        point.time_from_start.nanosec = int((self._gripper_move_duration - sec) * 1e9)
+        goal.trajectory.points = [point]
+        send_fut = self._gripper_traj_client.send_goal_async(goal)
+        if not self._wait_for_future(send_fut, self._move_timeout):
+            self.get_logger().warn(f"[GRIPPER] {label}: send-goal timed out")
+            return False
+        goal_handle = send_fut.result()
+        if goal_handle is None or not goal_handle.accepted:
+            self.get_logger().warn(f"[GRIPPER] {label}: goal rejected by controller")
+            return False
+        res_fut = goal_handle.get_result_async()
+        if not self._wait_for_future(res_fut, self._move_timeout):
+            self.get_logger().warn(f"[GRIPPER] {label}: result timed out")
+            return False
+        return True
+
+    def _gripper_open(self) -> bool:
+        return self._gripper_move_to(self._gripper_open_pos, 'open')
+
+    def _gripper_close(self) -> bool:
+        return self._gripper_move_to(self._gripper_closed_pos, 'close')
+
     def _fetch_co_from_scene(self, co_id: str):
         req = GetPlanningScene.Request()
         req.components.components = PlanningSceneComponents.WORLD_OBJECT_GEOMETRY
@@ -1255,28 +1316,47 @@ class GraspExecutorNode(Node):
                 f"[GRIPPER] pre-grasp opening={actual_opening*1000:.1f}mm "
                 f"(ICGNet={icgnet_opening*1000:.1f}mm, per finger={per_finger_pos*1000:.1f}mm){width_note}"
             )
-        self._gripper.move_to_position(per_finger_pos)
-        self._gripper.wait_until_executed(self._move_timeout)
+        self._gripper_move_to(per_finger_pos, 'pre-grasp')
 
         # ── Step 0: update collision scene ───────────────────────────────────
         if self._use_collision_scene:
             self._arm.update_planning_scene()
 
+        # The Panda gripper is symmetric about its approach axis: rotating the grasp
+        # frame 180° around its Z (approach) axis yields a physically identical grasp but
+        # a different wrist roll, which often resolves an IK/reachability failure (joint 7
+        # near its limit). The approach axis is unchanged, so pre/contact/lift positions
+        # stay valid. Try the ICGNet orientation first, fall back to the flipped one, and
+        # propagate whichever planned to every later move (approach/lift/place).
+        quat_flip = (
+            Rotation.from_quat(quat_xyzw) * Rotation.from_euler('z', 180.0, degrees=True)
+        ).as_quat().tolist()
+
         # ── Step 1/5: pre-grasp (joint-space, default velocity) ───────────────
         self.get_logger().info(
             f"[STEP 1/5] PRE-GRASP → [{pre_pos[0]:.3f}, {pre_pos[1]:.3f}, {pre_pos[2]:.3f}]"
         )
-        t0 = time.time()
-        self._arm.move_to_pose(position=pre_pos, quat_xyzw=quat_xyzw)
-        ok = self._arm.wait_until_executed(self._move_timeout)
-        dt = time.time() - t0
+        ok = False
+        for label, q_try in (("icgnet", quat_xyzw), ("flip180", quat_flip)):
+            t0 = time.time()
+            self._arm.move_to_pose(position=pre_pos, quat_xyzw=q_try)
+            ok = self._arm.wait_until_executed(self._move_timeout)
+            dt = time.time() - t0
+            if ok:
+                quat_xyzw = q_try
+                self.get_logger().info(
+                    f"[STEP 1/5] Pre-grasp reached in {dt:.2f}s (orient={label})"
+                )
+                break
+            self.get_logger().warn(
+                f"[STEP 1/5] PRE-GRASP plan failed in {dt:.2f}s (orient={label})"
+            )
         if not ok:
             self._last_failure_reason = REASON_PREGRASP_PLAN_FAIL
             self.get_logger().warn(
-                f"[STEP 1/5] PRE-GRASP FAILED in {dt:.2f}s — aborting this candidate"
+                "[STEP 1/5] PRE-GRASP FAILED (both orientations) — aborting this candidate"
             )
             return self._abort_grasp(target_co_id)
-        self.get_logger().info(f"[STEP 1/5] Pre-grasp reached in {dt:.2f}s")
         time.sleep(self._pregrasp_settle_time)
 
         self._arm.max_velocity = self._approach_velocity
@@ -1321,8 +1401,7 @@ class GraspExecutorNode(Node):
 
         # ── Step 3/5: close gripper + verify grasp ────────────────────────────
         self.get_logger().info("[STEP 3/5] CLOSING GRIPPER")
-        self._gripper.close()
-        self._gripper.wait_until_executed(self._move_timeout)
+        self._gripper_close()
         # Demand a fresh joint_state: wall-clock sleep is meaningless at low RTF (e.g. 0.03).
         # At RTF 0.03 the broadcaster runs at 50 Hz sim ≈ 1.5 msg/s wall; 0.5s sleep
         # would read a state from before the gripper command settled.
@@ -1539,6 +1618,23 @@ class GraspExecutorNode(Node):
         self._arm.max_velocity = self._transport_velocity
         self._arm.max_acceleration = self._transport_acceleration
 
+        # Once the object is secured by friction, deposit it with a neutral top-down wrist
+        # instead of carrying the (possibly tilted) grasp orientation through transport.
+        # A tilted wrist makes the lateral transfer hard to plan (TRANSFER_PLAN_FAIL) and
+        # releases the object tilted/high so it rolls out of the bin (PLACE_ROLLOUT). Build
+        # a top-down frame (TCP z = -Z world) that preserves the finger-closing direction
+        # projected onto the horizontal plane, so the wrist rotates minimally from the grasp.
+        _R = Rotation.from_quat(quat_xyzw).as_matrix()
+        _x_proj = np.array([_R[0, 0], _R[1, 0], 0.0])
+        if np.linalg.norm(_x_proj) < 1e-6:
+            _x_proj = np.array([1.0, 0.0, 0.0])
+        _x_proj /= np.linalg.norm(_x_proj)
+        _z_down = np.array([0.0, 0.0, -1.0])
+        _y_axis = np.cross(_z_down, _x_proj)
+        quat_place = Rotation.from_matrix(
+            np.column_stack([_x_proj, _y_axis, _z_down])
+        ).as_quat().tolist()
+
         def _co_detach_remove():
             if self._use_collision_scene:
                 try:
@@ -1548,16 +1644,15 @@ class GraspExecutorNode(Node):
                     self.get_logger().warn(f"[PLACE] Detach/remove failed: {e}")
 
         # ── Step 5/7: joint-space transfer → above bin ───────────────────────────
-        # OMPL plans the long lateral arc freely. Orientation (quat_xyzw) is an IK GOAL
-        # on the TARGET, not a path constraint, so pick_ik finds a valid seed without hitting
-        # joint limits. Both start (lift, gripper-down) and goal (above bin, gripper-down)
-        # share a similar wrist configuration → OMPL finds a smooth path.
+        # OMPL plans the long lateral arc freely. Orientation (quat_place, top-down) is an
+        # IK GOAL on the TARGET, not a path constraint, so pick_ik finds a valid seed without
+        # hitting joint limits. Goal wrist is top-down → OMPL finds a smooth path.
         self.get_logger().info(
             f"[STEP 5/7] TRANSFER → {[f'{v:.3f}' for v in transfer_pos]}"
             f"  (joint-space, orient=target, vel={self._transport_velocity})"
         )
         t0 = time.time()
-        self._arm.move_to_pose(position=transfer_pos, quat_xyzw=quat_xyzw, cartesian=False)
+        self._arm.move_to_pose(position=transfer_pos, quat_xyzw=quat_place, cartesian=False)
         ok = self._arm.wait_until_executed(self._move_timeout)
         if not ok:
             self._last_failure_reason = REASON_TRANSFER_PLAN_FAIL
@@ -1579,16 +1674,15 @@ class GraspExecutorNode(Node):
             return self._abort_grasp(target_co_id)
 
         # ── Step 6/7: Cartesian lower → place_release ────────────────────────────
-        # Threshold 0.3: top-down grasps achieve fraction≈1.0 (full descent);
-        # horizontal grasps hit an IK discontinuity at ≈50% and stop mid-way — still
-        # accepted (0.5 ≥ 0.3) so the object is released ~5 cm higher and falls into bin.
-        # Joint-space alternative causes 30s+ spinning via distant IK branches.
+        # Wrist is now top-down (quat_place), so the straight descent achieves
+        # fraction≈1.0 and the object is released just above the bin floor. Threshold
+        # kept at 0.3 as a safety net; joint-space alternative causes 30s+ spinning.
         self.get_logger().info(
             f"[STEP 6/7] LOWER → {[f'{v:.3f}' for v in place_release_pos]}"
         )
         t0 = time.time()
         self._arm.move_to_pose(
-            position=place_release_pos, quat_xyzw=quat_xyzw,
+            position=place_release_pos, quat_xyzw=quat_place,
             cartesian=True,
             cartesian_max_step=self._cartesian_max_step_approach,
             cartesian_fraction_threshold=0.3,
@@ -1614,17 +1708,42 @@ class GraspExecutorNode(Node):
             return self._abort_grasp(target_co_id)
 
         # ── Step 7/7: open gripper → release object ────────────────────────────
+        # We always want the gripper FULLY open on release. The hand controller reports
+        # SUCCEEDED on the open goal even when the fingers barely move (goal_tolerance=0.04 >
+        # full stroke), so verify the ABSOLUTE opening: the jaw must reach (near) full open
+        # (gap >= open_pos − release_open_tolerance). Re-issue the open otherwise, and fail
+        # with RELEASE_FAIL if it never reaches full opening (object stayed jammed).
+        release_min = self._gripper_open_pos - self._release_open_tolerance
         self.get_logger().info("[STEP 7/7] RELEASING OBJECT")
-        self._gripper.open()
-        self._gripper.wait_until_executed(self._move_timeout)
+        self._gripper_open()
         # Accumulate N fresh joint_state messages so the object has sim-time to fall
         # free before the retract move. RTF-independent: each call waits for one
-        # broadcaster tick at 50 Hz sim (~release_settle_states * 20ms sim = 0.4s sim).
+        # broadcaster tick at 50 Hz sim (~release_settle_states * 20ms sim).
         gap_after_open = self._settle_release(self._release_settle_states)
+        release_retries = 0
+        while gap_after_open < release_min and release_retries < self._max_release_retries:
+            release_retries += 1
+            self.get_logger().warn(
+                f"[STEP 7/7] Gripper not fully open "
+                f"(gap={gap_after_open*1000:.1f}mm < {release_min*1000:.1f}mm, "
+                f"target {self._gripper_open_pos*1000:.0f}mm) — object likely jammed; "
+                f"re-opening ({release_retries}/{self._max_release_retries})"
+            )
+            self._gripper_open()
+            gap_after_open = self._settle_release(self._release_settle_states)
         self.get_logger().info(
             f"[STEP 7/7] Finger gap after open: {gap_after_open*1000:.1f}mm "
-            f"(~0=gripper stuck/not open, ~40=fully open)"
+            f"(target {self._gripper_open_pos*1000:.0f}mm = fully open)"
         )
+        if gap_after_open < release_min:
+            self._last_failure_reason = REASON_RELEASE_FAIL
+            self.get_logger().warn(
+                f"[STEP 7/7] RELEASE FAILED: gripper never reached full opening "
+                f"({gap_after_open*1000:.1f}mm < {release_min*1000:.1f}mm) after "
+                f"{self._max_release_retries} retries — object stayed jammed"
+            )
+            _co_detach_remove()
+            return self._abort_grasp(target_co_id)
 
         _co_detach_remove()
         if self._use_collision_scene:
@@ -1636,7 +1755,7 @@ class GraspExecutorNode(Node):
         # ── Retract: Cartesian +Z before going HOME ────────────────────────────
         self.get_logger().info(f"[RETRACT] Cartesian retract → z={retract_pos[2]:.3f}")
         self._arm.move_to_pose(
-            position=retract_pos, quat_xyzw=quat_xyzw,
+            position=retract_pos, quat_xyzw=quat_place,
             cartesian=True,
             cartesian_max_step=self._cartesian_max_step_approach,
             cartesian_fraction_threshold=self._cartesian_fraction_threshold,
