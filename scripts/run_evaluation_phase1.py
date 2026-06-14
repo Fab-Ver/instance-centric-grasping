@@ -123,6 +123,27 @@ def write_summary(rows, summary_path):
         lines.append(f'  {n:4d} × {code}')
     lines.append('')
 
+    # Grasp-proposal scores: pair each attempt's ICGNet score with its outcome to gauge
+    # whether higher-scored proposals actually correlate with success.
+    def _stats(vals):
+        return (f'mean={sum(vals) / len(vals):.3f} min={min(vals):.3f} max={max(vals):.3f} '
+                f'(n={len(vals)})') if vals else 'n/a'
+
+    succ_scores, fail_scores = [], []
+    for r in rows:
+        for code, sc in zip(r['attempt_reasons'], r['attempt_scores']):
+            (succ_scores if code == 'SUCCESS' else fail_scores).append(sc)
+    lines.append('Grasp-proposal scores by attempt outcome:')
+    lines.append(f'  SUCCESS attempts: {_stats(succ_scores)}')
+    lines.append(f'  FAILED  attempts: {_stats(fail_scores)}')
+    lines.append('')
+
+    lines.append('Best-proposal score per class (top candidate, attempt 1):')
+    for cls, runs in by_class.items():
+        best = [r['attempt_scores'][0] for r in runs if r['attempt_scores']]
+        lines.append(f'  {cls:10s} {_stats(best)}')
+    lines.append('')
+
     text = '\n'.join(lines)
     with open(summary_path, 'w') as f:
         f.write(text + '\n')
@@ -170,7 +191,7 @@ def main():
         writer = csv.writer(f)
         writer.writerow(['Run_ID', 'Target_Class', 'Detected_Classes', 'Success', 'Attempts',
                          'First_Attempt', 'Planning_Time', 'Execution_Time', 'Collision_Detected',
-                         'Target_Not_Found', 'Failure_Reason', 'Attempt_Reasons'])
+                         'Target_Not_Found', 'Failure_Reason', 'Attempt_Reasons', 'Attempt_Scores'])
 
         run_id = 0
         for cls in args.classes:
@@ -189,17 +210,20 @@ def main():
                     attempts = res.grasps_attempted
                     first_attempt = 1 if (success and attempts == 1) else 0
                     attempt_reasons = list(res.attempt_reasons)
+                    attempt_scores = list(res.attempt_scores)
                     detected_classes = list(res.detected_classes)
                     failure_reason = res.failure_reason
                     row = {
                         'class': cls, 'success': success, 'attempts': attempts,
                         'failure_reason': failure_reason, 'attempt_reasons': attempt_reasons,
+                        'attempt_scores': attempt_scores,
                     }
                     writer.writerow([
                         run_id, cls, ';'.join(detected_classes), 1 if success else 0, attempts,
                         first_attempt, round(res.planning_time, 2), round(res.execution_time, 2),
                         1 if res.collision_detected else 0, 1 if res.target_not_found else 0,
                         failure_reason, ';'.join(attempt_reasons),
+                        ';'.join(f"{s:.3f}" for s in attempt_scores),
                     ])
                     node.get_logger().info(
                         f"Run {run_id}: success={success} attempts={attempts} "
@@ -207,8 +231,9 @@ def main():
                         f"failure_reason={failure_reason} attempts_log={attempt_reasons}")
                 else:
                     row = {'class': cls, 'success': False, 'attempts': 0,
-                           'failure_reason': 'SERVICE_NULL', 'attempt_reasons': []}
-                    writer.writerow([run_id, cls, '', 0, 0, 0, 0.0, 0.0, 0, 0, 'SERVICE_NULL', ''])
+                           'failure_reason': 'SERVICE_NULL', 'attempt_reasons': [],
+                           'attempt_scores': []}
+                    writer.writerow([run_id, cls, '', 0, 0, 0, 0.0, 0.0, 0, 0, 'SERVICE_NULL', '', ''])
                 rows.append(row)
                 f.flush()
 

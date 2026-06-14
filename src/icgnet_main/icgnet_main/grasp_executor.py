@@ -544,6 +544,7 @@ class GraspExecutorNode(Node):
         res.collision_detected = False
         res.failure_reason = ''
         res.attempt_reasons = []
+        res.attempt_scores = []
         res.detected_classes = []
 
         self.get_logger().info(
@@ -654,8 +655,10 @@ class GraspExecutorNode(Node):
         # meaningless at low RTF, sim time is the physically relevant motion duration.
         t_exec_start_ns = self.get_clock().now().nanoseconds
         attempt_reasons = []
+        attempt_scores = []
 
         for i, g in enumerate(candidates):
+            attempt_scores.append(float(g.score))
             p = g.pose.position
             self.get_logger().info(
                 f"{'='*60}\n"
@@ -672,6 +675,7 @@ class GraspExecutorNode(Node):
                 res.collision_detected = self._last_collision_detected
                 res.failure_reason = REASON_SUCCESS
                 res.attempt_reasons = attempt_reasons
+                res.attempt_scores = attempt_scores
                 res.message = f"Grasp succeeded on attempt {i+1}"
                 self.get_logger().info(
                     f"[SUCCESS] Grasp completed on attempt {i+1}/{len(candidates)}"
@@ -691,6 +695,7 @@ class GraspExecutorNode(Node):
         res.execution_time = (self.get_clock().now().nanoseconds - t_exec_start_ns) * 1e-9
         res.collision_detected = self._last_collision_detected
         res.attempt_reasons = attempt_reasons
+        res.attempt_scores = attempt_scores
         res.failure_reason = attempt_reasons[-1] if attempt_reasons else 'UNKNOWN'
         res.message = f"All {len(candidates)} grasp attempts failed"
         return res
