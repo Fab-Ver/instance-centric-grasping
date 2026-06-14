@@ -53,9 +53,14 @@ panda_hand_controller:
     state_publish_rate: 50.0
     action_monitor_rate: 20.0
     allow_partial_joints_goal: false
+    # i=0 (PD-only). The integral term, charged toward closing during a grasp, otherwise
+    # dominates the open command at release and keeps the fingers clamped on the object (the
+    # open never wins until the integral unwinds, which takes minutes). P alone gives ample,
+    # size-scaling grip force for friction holding (~P*radius N) and the release inverts
+    # instantly — object-size independent. See grasp_executor STEP 7 release handling.
     gains:
-      panda_finger_joint1: {p: 3000.0, i: 50.0, d: 20.0, i_clamp: 100.0}
-      panda_finger_joint2: {p: 3000.0, i: 50.0, d: 20.0, i_clamp: 100.0}
+      panda_finger_joint1: {p: 3000.0, i: 0.0, d: 20.0, i_clamp: 100.0}
+      panda_finger_joint2: {p: 3000.0, i: 0.0, d: 20.0, i_clamp: 100.0}
     constraints:
       stopped_velocity_tolerance: 0.05
       goal_time: 5.0

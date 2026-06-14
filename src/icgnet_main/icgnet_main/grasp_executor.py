@@ -53,6 +53,7 @@ REASON_GRASP_MISS = 'GRASP_MISS'                     # Step 3 closed on empty ai
 REASON_OBJECT_TIPPED = 'OBJECT_TIPPED'               # Step 3 barely closed (gap > max)
 REASON_LIFT_PLAN_FAIL = 'LIFT_PLAN_FAIL'             # Step 4 Cartesian lift planning failed
 REASON_LIFT_DROP = 'LIFT_DROP'                       # Step 4 object dropped during lift
+REASON_OBJECT_SLIPPED = 'OBJECT_SLIPPED'             # Step 4 object slipped: rose far less than the TCP
 REASON_TRANSFER_PLAN_FAIL = 'TRANSFER_PLAN_FAIL'     # Step 5 transfer planning failed
 REASON_TRANSFER_DROP = 'TRANSFER_DROP'               # Step 5 object dropped during transfer
 REASON_LOWER_PLAN_FAIL = 'LOWER_PLAN_FAIL'           # Step 6 lower planning failed
@@ -167,6 +168,9 @@ class GraspExecutorNode(Node):
         # goal_tolerance=0.04 > full stroke — so verify the actual opening explicitly.)
         self.declare_parameter('release_open_tolerance', 0.003)
         self.declare_parameter('max_release_retries', 2)
+        # Slip detection: a held object must rise with the TCP by at least this fraction of
+        # lift_height during STEP 4; rising far less means the friction grasp gave way.
+        self.declare_parameter('slip_follow_ratio', 0.5)
         self.declare_parameter('bin_slot_spacing', 0.12)
         self.declare_parameter('reset_scene_service', '/icgnet/reset_scene')
 
@@ -203,6 +207,7 @@ class GraspExecutorNode(Node):
         self._gripper_move_duration = self.get_parameter('gripper_move_duration').get_parameter_value().double_value
         self._release_open_tolerance = self.get_parameter('release_open_tolerance').get_parameter_value().double_value
         self._max_release_retries = self.get_parameter('max_release_retries').get_parameter_value().integer_value
+        self._slip_follow_ratio = self.get_parameter('slip_follow_ratio').get_parameter_value().double_value
         self._bin_slot_spacing = self.get_parameter('bin_slot_spacing').get_parameter_value().double_value
         self._reset_scene_svc_name = self.get_parameter('reset_scene_service').get_parameter_value().string_value
 
@@ -1448,6 +1453,10 @@ class GraspExecutorNode(Node):
         # planning cannot find an IK solution from the extended grasp configuration.
         self._arm.max_velocity = self._lift_velocity
         self._arm.max_acceleration = self._lift_acceleration
+        # Object height before the lift, to detect slipping afterwards (rose with the TCP?).
+        with self._object_pose_lock:
+            _obj_pose_pre_lift = self._object_pose
+        obj_z_before_lift = _obj_pose_pre_lift.z if _obj_pose_pre_lift is not None else None
         self.get_logger().info(
             f"[STEP 4/5] CARTESIAN LIFT → [{lift_pos[0]:.3f}, {lift_pos[1]:.3f}, {lift_pos[2]:.3f}]"
         )
@@ -1488,6 +1497,33 @@ class GraspExecutorNode(Node):
                 except Exception as e:
                     self.get_logger().warn(f"[STEP 4 drop] Detach failed: {e}")
             return self._abort_grasp(target_co_id)
+
+        # Slip detection: a held object should rise with the TCP by ~lift_height. If it rose
+        # far less, the friction grasp gave way and the object slipped through the fingers
+        # (a real risk now that grip force is PD-only). Flag OBJECT_SLIPPED and abort.
+        with self._object_pose_lock:
+            _obj_pose_post_lift = self._object_pose
+        if obj_z_before_lift is not None and _obj_pose_post_lift is not None:
+            actual_rise = _obj_pose_post_lift.z - obj_z_before_lift
+            min_rise = self._lift_height * self._slip_follow_ratio
+            if actual_rise < min_rise:
+                self._last_failure_reason = REASON_OBJECT_SLIPPED
+                self.get_logger().warn(
+                    f"[STEP 4/5 POST-CHECK] OBJECT SLIPPED: rose {actual_rise*100:.1f}cm vs "
+                    f"expected ~{self._lift_height*100:.0f}cm "
+                    f"(< {self._slip_follow_ratio*100:.0f}% = {min_rise*100:.1f}cm) — grip gave way"
+                )
+                if self._use_collision_scene:
+                    try:
+                        self._arm.detach_collision_object(id=target_co_id)
+                        self._arm.remove_collision_object(id=target_co_id)
+                    except Exception as e:
+                        self.get_logger().warn(f"[STEP 4 slip] Detach failed: {e}")
+                return self._abort_grasp(target_co_id)
+            self.get_logger().info(
+                f"[STEP 4/5 POST-CHECK] Object followed lift: rose {actual_rise*100:.1f}cm "
+                f"(expected ~{self._lift_height*100:.0f}cm) — grip holding"
+            )
 
         # ── Steps 5–7 + HOME: transport → lower → release → retract → HOME ─────
         return self._place_object(quat_xyzw, target_co_id, skip_place, place_xy=place_xy)
