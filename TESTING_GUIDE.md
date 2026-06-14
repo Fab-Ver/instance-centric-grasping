@@ -2,7 +2,7 @@
 
 **Branch:** `main`
 **Stack:** ROS2 Humble + Gazebo Sim Fortress (gz-sim 6, DART physics) + MoveIt2 + gz_ros2_control
-**Last updated:** 2026-06-09
+**Last updated:** 2026-06-14
 
 ---
 
@@ -228,7 +228,6 @@ Bring up **T1 + T3-A + T4** (the script handles spawn + grasp itself — you do 
 ros2 launch icgnet_main world.launch.py rviz:=false
 
 # T3-A — GPU inference (REQUIRED: replay only has one saved object, no good for a multi-class run)
-export PYTHONPATH=~/instance-centric-grasping/.venv/lib/python3.12/site-packages:$PYTHONPATH
 ros2 launch icgnet_main icgnet_inference.launch.py
 
 # T4 — grasp executor
@@ -251,38 +250,79 @@ ros2 topic echo /model_poses --once   # must print a TFMessage
 cd ~/instance-centric-grasping
 source /opt/ros/humble/setup.bash && source install/setup.bash
 
-# Default: 6 classes × 20 runs = 120 runs (mug, box, can, bottle, cylindric, ball)
+# Default: 6 classes × 20 runs, target-driven (mug, box, can, bottle, cylindric, ball)
 ./scripts/run_evaluation_phase1.py
 
 # Quick subset:
-./scripts/run_evaluation_phase1.py --runs-per-class 5 --classes can ball
+./scripts/run_evaluation_phase1.py --runs-per-class 30 --classes can ball
+
+# Two separate experiments (single-object always; run them at different times):
+./scripts/run_evaluation_phase1.py --runs-per-class 30               # mode=target (default)
+./scripts/run_evaluation_phase1.py --runs-per-class 30 --mode any    # class-agnostic
 ```
 
 | Option | Default | Meaning |
 |--------|---------|---------|
 | `--runs-per-class N` | `20` | runs per object class |
 | `--classes ...` | all 6 catalog classes | which classes to evaluate |
+| `--mode {target,any}` | `target` | grasp target: `target` = the spawned class (target-driven, needs correct ICGNet classification); `any` = class-agnostic (isolates segmentation+grasp from the classification step). The two modes write to separate `_<mode>_` files. |
 
 Each class spawns exactly one model from `catalog.yaml` (deterministic, no per-run variance):
 `mug`→threshold_porcelain_coffee_mug, `box`→cardboard_box, `can`→coke_can,
-`bottle`→water_bottle_fuel, `cylindric`→pringles_can, `ball`→tennis_ball.
+`bottle`→cajun_tonic_bottle, `cylindric`→pringles_can, `ball`→tennis_ball.
 
-### Output
+**Spawn workspace (2026-06-14)**: objects spawn in `x∈[0.45,0.70]`, `y∈[±0.30]`, `reach≤0.75` —
+the arm's dexterous workspace AND the camera's reliable FOV (matches `scene_manager`). The previous
+`x∈[0.40,0.80]`, `reach≤0.85` reached the camera frustum edge (Mask3D fails) and the Panda's
+kinematic limit, inflating `PERCEPTION_NO_GRASP`/`PREGRASP_PLAN_FAIL` with confounds not attributable
+to ICGNet.
 
-- **`log/phase1_results.csv`** — one row per run:
-  `Run_ID, Target_Class, Success, Attempts, First_Attempt, Planning_Time, Execution_Time,
-  Collision_Detected, Target_Not_Found, Failure_Reason, Attempt_Reasons`
+**Respawn robustness (2026-06-14)**: each run does `remove → spawn` with **verification + retry**.
+The harness subscribes to `/model_poses` (ground truth of which entities are in gz) and confirms the
+old object is gone before spawning and the new one appears before grasping; `spawn_object` now exits
+non-zero on a name collision so the harness can retry instead of grasping a **stale, never-respawned**
+scene (the bug that produced bit-identical inference rows in earlier CSVs). A run that fails 3
+remove+spawn cycles is logged as `SPAWN_FAIL` rather than silently corrupting the batch.
+
+**Per-run speedup (2026-06-14)**: `spawn_object` has a `gz_server_wait` param (default `5.0` s) that
+only matters on a cold start (spawn launched right after `world.launch.py`, gz-sim server still
+booting). The eval loop passes `gz_server_wait:=0.0` — the server is up for the whole batch and
+presence is verified via `/model_poses` — saving ~5 s/run (~15 min over a 180-run batch). Manual
+T2-A spawns keep the 5 s default.
+
+### Output — versioned under `report/`, never overwrites
+
+All paths share the `<R>runs_<classes>_<mode>_v<N>` stem (`<N>`=0 or last+1):
+
+- **`report/eval_<...>_v<N>.csv`** — one row per run:
+  `Run_ID, Target_Class, Detected_Classes, Success, Attempts, First_Attempt, Planning_Time,
+  Execution_Time, Collision_Detected, Target_Not_Found, Failure_Reason, Attempt_Reasons, Attempt_Scores`
+  - `Detected_Classes` = one label per ICGNet instance **pre class-filter** (true-class→detected confusion).
   - `Planning_Time` = ICGNet inference + selection (wall-clock; dominated by GPU inference).
   - `Execution_Time` = arm/gripper motion on the **sim clock** (wall-clock is meaningless at low RTF).
-  - `Failure_Reason` = run-level outcome code; `Attempt_Reasons` = `;`-joined per-attempt codes.
-- **`log/phase1_summary.txt`** (also echoed to the log at the end): overall + per-class GSR,
-  avg attempts until success, first-attempt rate, and failure-mode histograms (run-level + attempt-level).
+  - `Failure_Reason` = run-level outcome code; `Attempt_Reasons` / `Attempt_Scores` = `;`-joined
+    per-attempt codes and the ICGNet score of the proposal tried at each attempt (parallel lists).
+  - `Target_Class` always records the **spawned** class (even in `mode=any`) → per-class breakdown works in both modes.
+- **`report/eval_<...>_v<N>_summary.txt`** — overall + per-class GSR, avg attempts until success,
+  first-attempt rate, failure-mode histograms (run-level + attempt-level), and grasp-proposal score
+  by outcome (SUCCESS vs FAILED) + best-proposal score per class (score↔success correlation).
+- **`report/inference_<...>_v<N>.jsonl`** — one JSONL line per run with the **full ICGNet proposal set**
+  (pre-filter), grouped by instance: `instance_id, semantic_class, class_name, n_grasps, best_score,
+  grasp_centroid, grasps[{score, tcp, approach_axis, inclination_deg, width}]`. Lets you quantify
+  over-segmentation (instances/object) and **grasp inclination** offline without re-running the GPU.
+- **`report/grasping_<...>_v<N>.jsonl`** — one JSONL line per run with per-attempt geometry + outcome:
+  `attempts[{idx, instance_id, score, tcp, approach_axis, inclination_deg, width, reason}]`.
+
+`inclination_deg` = angle between the gripper approach axis and world −Z (0° = top-down); high
+inclination is the geometric driver of `PREGRASP_PLAN_FAIL`. Dumps are written by `grasp_executor`
+(it has the raw pre-filter data); the harness passes `run_id` + dump paths via `ExecuteGrasp.srv`.
+The three `report/` files line up by `Run_ID`.
 
 **Failure-mode codes** (`Failure_Reason` / `Attempt_Reasons`): `SUCCESS`, `PERCEPTION_NO_GRASP`,
 `PREGRASP_PLAN_FAIL`, `APPROACH_FAIL`, `GRASP_MISS`, `OBJECT_TIPPED`, `LIFT_PLAN_FAIL`, `LIFT_DROP`,
-`TRANSFER_PLAN_FAIL`, `TRANSFER_DROP`, `LOWER_PLAN_FAIL`, `LOWER_DROP`, `PLACE_ROLLOUT`.
+`TRANSFER_PLAN_FAIL`, `TRANSFER_DROP`, `LOWER_PLAN_FAIL`, `LOWER_DROP`, `PLACE_ROLLOUT`, `SPAWN_FAIL`.
 
-> Notes: tall/thin objects (`cylindric`=pringles_can, `bottle`=water_bottle_fuel) are expected to
+> Notes: tall/thin objects (`cylindric`=pringles_can, `bottle`=cajun_tonic_bottle) are expected to
 > show more `APPROACH_FAIL`/`GRASP_MISS` — read the per-class attempt histogram, not just GSR.
 > CSV is flushed every run, so the file is usable even if the run is interrupted.
 

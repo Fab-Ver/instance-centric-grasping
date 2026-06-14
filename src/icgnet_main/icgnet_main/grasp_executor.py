@@ -1,3 +1,4 @@
+import json
 import time
 from threading import Lock, Thread
 
@@ -529,6 +530,78 @@ class GraspExecutorNode(Node):
             f'({n_skipped} already in bin, skipped).'
         )
 
+    @staticmethod
+    def _grasp_geometry(g):
+        """Return (tcp[xyz], approach_axis[xyz], inclination_deg) for a grasp proposal.
+
+        inclination_deg = angle between the gripper approach axis and the world -Z
+        (straight-down) direction. 0° = perfect top-down; large = tilted, which the arm
+        often cannot plan a pre-grasp for (the PREGRASP_PLAN_FAIL failure mode).
+        """
+        q = g.pose.orientation
+        approach = Rotation.from_quat([q.x, q.y, q.z, q.w]).as_matrix()[:, 2]
+        inclination = float(np.degrees(np.arccos(np.clip(-approach[2], -1.0, 1.0))))
+        p = g.pose.position
+        return [p.x, p.y, p.z], [float(a) for a in approach], inclination
+
+    def _dump_inference(self, path: str, run_id: int, target: str, grasps) -> None:
+        """Append one JSONL line capturing the full ICGNet proposal set (pre-filter).
+
+        Grouped by instance so over-segmentation (instances-per-object) and grasp
+        inclination can be quantified offline without re-running the GPU.
+        """
+        if not path:
+            return
+        proposals = list(grasps.grasps) if grasps is not None else []
+        by_inst: dict[int, list] = {}
+        for g in proposals:
+            by_inst.setdefault(int(g.instance_id), []).append(g)
+
+        instances = []
+        for iid in sorted(by_inst):
+            gs = by_inst[iid]
+            cls_id = int(gs[0].semantic_class)
+            grasp_dicts = []
+            for g in gs:
+                tcp, approach, incl = self._grasp_geometry(g)
+                grasp_dicts.append({
+                    'score': float(g.score), 'tcp': tcp, 'approach_axis': approach,
+                    'inclination_deg': incl, 'width': float(g.width),
+                })
+            centroid = [float(np.mean([gd['tcp'][k] for gd in grasp_dicts])) for k in range(3)]
+            instances.append({
+                'instance_id': iid, 'semantic_class': cls_id,
+                'class_name': CLASS_NAMES.get(cls_id, '?'), 'n_grasps': len(gs),
+                'best_score': max(float(g.score) for g in gs), 'grasp_centroid': centroid,
+                'grasps': grasp_dicts,
+            })
+
+        record = {
+            'run_id': int(run_id), 'target_class': target, 'n_proposals': len(proposals),
+            'n_instances': len(instances),
+            'detected_classes': [inst['class_name'] for inst in instances],
+            'instances': instances,
+        }
+        self._append_jsonl(path, record)
+
+    def _dump_grasping(self, path: str, run_id: int, target: str, success: bool,
+                       failure_reason: str, attempt_records: list) -> None:
+        """Append one JSONL line with per-attempt grasp geometry and outcome."""
+        if not path:
+            return
+        record = {
+            'run_id': int(run_id), 'target_class': target, 'success': bool(success),
+            'failure_reason': failure_reason, 'attempts': attempt_records,
+        }
+        self._append_jsonl(path, record)
+
+    def _append_jsonl(self, path: str, record: dict) -> None:
+        try:
+            with open(path, 'a') as f:
+                f.write(json.dumps(record) + '\n')
+        except OSError as e:
+            self.get_logger().warn(f"[DUMP] Could not write '{path}': {e}")
+
     def _execute_grasp_cb(self, req: ExecuteGrasp.Request, res: ExecuteGrasp.Response):
         with self._manifest_lock:
             multi = self._multi_object
@@ -538,6 +611,9 @@ class GraspExecutorNode(Node):
         target = req.target.strip() if req.target else 'any'
         max_attempts = req.max_attempts if req.max_attempts > 0 else self._default_max_attempts
         skip_place = req.skip_place
+        run_id = req.run_id
+        inference_dump = req.inference_dump_path.strip()
+        grasping_dump = req.grasping_dump_path.strip()
 
         res.planning_time = 0.0
         res.execution_time = 0.0
@@ -604,11 +680,16 @@ class GraspExecutorNode(Node):
                 inst_cls.setdefault(g.instance_id, g.semantic_class)
             res.detected_classes = [CLASS_NAMES.get(inst_cls[i], '?') for i in sorted(inst_cls)]
 
+        # Dump the full ICGNet proposal set (covers over-segmentation cases that filter to
+        # zero candidates) before any selection narrows it.
+        self._dump_inference(inference_dump, run_id, target, grasps)
+
         if grasps is None or len(grasps.grasps) == 0:
             res.success = False
             res.target_not_found = True
             res.failure_reason = REASON_PERCEPTION_NO_GRASP
             res.message = "No grasps received after inference"
+            self._dump_grasping(grasping_dump, run_id, target, False, res.failure_reason, [])
             return res
 
         candidates = self._filter_grasps(grasps.grasps, target)
@@ -621,6 +702,7 @@ class GraspExecutorNode(Node):
                 f"No grasps after filtering: target='{target}' — "
                 f"ICGNet predicted classes: {available}"
             )
+            self._dump_grasping(grasping_dump, run_id, target, False, res.failure_reason, [])
             return res
 
         candidates = candidates[:max_attempts]
@@ -656,9 +738,11 @@ class GraspExecutorNode(Node):
         t_exec_start_ns = self.get_clock().now().nanoseconds
         attempt_reasons = []
         attempt_scores = []
+        attempt_records = []
 
         for i, g in enumerate(candidates):
             attempt_scores.append(float(g.score))
+            tcp, approach_axis, inclination = self._grasp_geometry(g)
             p = g.pose.position
             self.get_logger().info(
                 f"{'='*60}\n"
@@ -666,8 +750,15 @@ class GraspExecutorNode(Node):
                 f"inst={g.instance_id} cls={g.semantic_class}({CLASS_NAMES.get(g.semantic_class,'?')}) "
                 f"pos=[{p.x:.3f},{p.y:.3f},{p.z:.3f}]"
             )
-            if self._execute_single_grasp(g, skip_place=skip_place):
-                attempt_reasons.append(REASON_SUCCESS)
+            ok = self._execute_single_grasp(g, skip_place=skip_place)
+            reason = REASON_SUCCESS if ok else (self._last_failure_reason or 'UNKNOWN')
+            attempt_reasons.append(reason)
+            attempt_records.append({
+                'idx': i + 1, 'instance_id': int(g.instance_id), 'score': float(g.score),
+                'tcp': tcp, 'approach_axis': approach_axis, 'inclination_deg': inclination,
+                'width': float(g.width), 'reason': reason,
+            })
+            if ok:
                 self._clear_current_grasp_marker()
                 res.success = True
                 res.grasps_attempted = i + 1
@@ -680,10 +771,10 @@ class GraspExecutorNode(Node):
                 self.get_logger().info(
                     f"[SUCCESS] Grasp completed on attempt {i+1}/{len(candidates)}"
                 )
+                self._dump_grasping(grasping_dump, run_id, target, True, REASON_SUCCESS, attempt_records)
                 return res
-            attempt_reasons.append(self._last_failure_reason or 'UNKNOWN')
             self.get_logger().warn(
-                f"[ATTEMPT {i+1}/{len(candidates)}] FAILED ({attempt_reasons[-1]}) — "
+                f"[ATTEMPT {i+1}/{len(candidates)}] FAILED ({reason}) — "
                 f"{'resetting scene and trying next candidate' if i + 1 < len(candidates) else 'no more candidates'}"
             )
             if i + 1 < len(candidates):
@@ -698,6 +789,7 @@ class GraspExecutorNode(Node):
         res.attempt_scores = attempt_scores
         res.failure_reason = attempt_reasons[-1] if attempt_reasons else 'UNKNOWN'
         res.message = f"All {len(candidates)} grasp attempts failed"
+        self._dump_grasping(grasping_dump, run_id, target, False, res.failure_reason, attempt_records)
         return res
 
     def _bin_grid_slots(self, n: int) -> list[tuple[float, float]]:

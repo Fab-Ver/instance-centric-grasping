@@ -30,10 +30,13 @@ from collections import Counter, defaultdict
 
 import rclpy
 from rclpy.node import Node
+from tf2_msgs.msg import TFMessage
 from icgnet_msgs.srv import ExecuteGrasp
 
 MAX_ATTEMPTS = 5
 TARGET_ENTITY = 'target_obj'
+ENTITY_WAIT_TIMEOUT = 8.0   # max wall-time to confirm a remove/spawn took effect in gz
+RESET_MAX_TRIES = 3         # remove+spawn cycles before giving up on a run
 
 
 class EvaluatorPhase1(Node):
@@ -42,30 +45,87 @@ class EvaluatorPhase1(Node):
         self.client = self.create_client(ExecuteGrasp, '/icgnet/execute_grasp')
         while not self.client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('Waiting for /icgnet/execute_grasp service...')
+        # Track which dynamic entities are currently in the scene. gz publishes the pose of
+        # every non-static model each step on dynamic_pose/info (remapped to /model_poses),
+        # so an entity's presence/absence here is the ground truth for remove/spawn success.
+        self._present_entities: set[str] = set()
+        self.create_subscription(TFMessage, '/model_poses', self._poses_cb, 10)
+
+    def _poses_cb(self, msg: TFMessage):
+        self._present_entities = {t.child_frame_id for t in msg.transforms}
+
+    def _spin(self, duration):
+        deadline = time.time() + duration
+        while time.time() < deadline:
+            rclpy.spin_once(self, timeout_sec=0.05)
+
+    def _wait_for_entity(self, name, present, timeout=ENTITY_WAIT_TIMEOUT):
+        """Block until `name` is present (present=True) or absent (present=False) in gz."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            self._spin(0.2)
+            if (name in self._present_entities) == present:
+                return True
+        return False
 
     def remove_target(self):
-        """Delete the single object from gz-sim (bridged as DeleteEntity, type 2 = MODEL)."""
-        subprocess.run([
+        """Delete the single object and confirm it is gone. Returns True when absent."""
+        proc = subprocess.run([
             'ros2', 'service', 'call', '/world/icgnet_world/remove',
             'ros_gz_interfaces/srv/DeleteEntity',
             f'{{entity: {{name: "{TARGET_ENTITY}", type: 2}}}}'
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(1.0)
+        ], capture_output=True, text=True)
+        if self._wait_for_entity(TARGET_ENTITY, present=False):
+            return True
+        self.get_logger().warn(
+            f'{TARGET_ENTITY} still present {ENTITY_WAIT_TIMEOUT:.0f}s after remove; '
+            f'service output: {proc.stdout.strip()[-200:]}')
+        return False
 
     def spawn_object(self, target_class):
-        """Spawn a single object of the given class (no distractors)."""
+        """Spawn a single object of the class and confirm it appears. Returns True on success."""
         self.get_logger().info(f'Spawning single object: target_class={target_class}')
-        subprocess.run([
+        proc = subprocess.run([
             'ros2', 'run', 'icgnet_main', 'spawn_object',
-            '--ros-args', '-p', f'target_class:={target_class}'
-        ])
-        time.sleep(2.0)
+            '--ros-args', '-p', f'target_class:={target_class}',
+            # gz-sim server is already up for the whole batch and presence is verified below,
+            # so skip the cold-start wait (~5s/run saved).
+            '-p', 'gz_server_wait:=0.0'
+        ], capture_output=True, text=True)
+        if proc.returncode != 0:
+            self.get_logger().warn(
+                f'spawn_object exited {proc.returncode} (likely name collision with a stale '
+                f'entity): {proc.stdout.strip()[-200:]}')
+            return False
+        if not self._wait_for_entity(TARGET_ENTITY, present=True):
+            self.get_logger().warn(f'{TARGET_ENTITY} not visible {ENTITY_WAIT_TIMEOUT:.0f}s after spawn')
+            return False
+        return True
 
-    def execute_grasp(self, target_class, timeout_sec=1200.0):
+    def reset_target(self, target_class):
+        """Remove the old object and spawn a fresh one, retrying on failure.
+
+        Breaks the stale-scene cascade: a failed remove leaves the previous object in place,
+        so the next spawn hits a name collision; we detect it (non-zero exit) and retry the
+        full remove+spawn cycle. Returns True only when a fresh object is confirmed in scene.
+        """
+        for attempt in range(1, RESET_MAX_TRIES + 1):
+            self.remove_target()
+            if self.spawn_object(target_class):
+                return True
+            self.get_logger().warn(
+                f'reset_target {target_class}: attempt {attempt}/{RESET_MAX_TRIES} failed, retrying')
+            time.sleep(1.0)
+        return False
+
+    def execute_grasp(self, target_class, run_id, inference_dump, grasping_dump, timeout_sec=1200.0):
         req = ExecuteGrasp.Request()
         req.target = target_class
         req.max_attempts = MAX_ATTEMPTS
         req.skip_place = False
+        req.run_id = run_id
+        req.inference_dump_path = inference_dump
+        req.grasping_dump_path = grasping_dump
         future = self.client.call_async(req)
         # Safety net: the executor bounds every move (move_timeout), so it should always
         # respond. This guards against an unforeseen wedge so one run can't freeze the batch.
@@ -76,7 +136,7 @@ class EvaluatorPhase1(Node):
         return future.result()
 
 
-def write_summary(rows, summary_path):
+def write_summary(rows, summary_path, mode):
     """Aggregate the per-run rows into GSR, avg-attempts-to-success and failure histograms."""
     by_class = defaultdict(list)
     for r in rows:
@@ -91,7 +151,9 @@ def write_summary(rows, summary_path):
             if code != 'SUCCESS':
                 attempt_failures[code] += 1
 
-    lines = ['=' * 60, 'PHASE 1 EVALUATION SUMMARY (single-object)', '=' * 60, '']
+    grasp_target = 'any (class-agnostic)' if mode == 'any' else 'spawned class (target-driven)'
+    lines = ['=' * 60, f'PHASE 1 EVALUATION SUMMARY (single-object, mode={mode})',
+             f'Grasp target = {grasp_target}', '=' * 60, '']
 
     total_succ = sum(1 for r in rows if r['success'])
     lines.append(f'Overall GSR: {total_succ}/{len(rows)} = {100.0 * total_succ / max(len(rows), 1):.1f}%')
@@ -150,15 +212,19 @@ def write_summary(rows, summary_path):
     return text
 
 
-def resolve_output_paths(report_dir, runs_per_class, classes):
-    """Return (csv_path, summary_path) under report_dir, named by runs/classes/version.
+def resolve_output_paths(report_dir, runs_per_class, classes, mode):
+    """Return output paths under report_dir, named by runs/classes/mode/version.
 
-    Base name: eval_<R>runs_<cls1-cls2-...>. The version is 0 if no file with that base
-    exists yet, otherwise (highest existing version + 1), so a run never overwrites a
-    previous result.
+    Returns (csv, summary, inference_dump, grasping_dump). The eval CSV uses the
+    eval_<R>runs_<cls...>_<mode> base; the JSONL dumps share the same
+    <R>runs_<cls...>_<mode>_v<N> suffix with an inference_/grasping_ prefix, so the
+    three files line up by Run_ID. The <mode> tag ('target' or 'any') keeps the two
+    experiments' outputs in separate files. The version is 0 if no eval CSV with that
+    base exists yet, otherwise (highest + 1), so a run never overwrites a previous result.
     """
     os.makedirs(report_dir, exist_ok=True)
-    base = f"eval_{runs_per_class}runs_{'-'.join(classes)}"
+    suffix = f"{runs_per_class}runs_{'-'.join(classes)}_{mode}"
+    base = f"eval_{suffix}"
     versions = []
     for p in glob.glob(os.path.join(report_dir, f"{base}_v*.csv")):
         m = re.search(rf"{re.escape(base)}_v(\d+)\.csv$", os.path.basename(p))
@@ -166,7 +232,9 @@ def resolve_output_paths(report_dir, runs_per_class, classes):
             versions.append(int(m.group(1)))
     version = max(versions) + 1 if versions else 0
     stem = os.path.join(report_dir, f"{base}_v{version}")
-    return f"{stem}.csv", f"{stem}_summary.txt"
+    inference_dump = os.path.join(report_dir, f"inference_{suffix}_v{version}.jsonl")
+    grasping_dump = os.path.join(report_dir, f"grasping_{suffix}_v{version}.jsonl")
+    return f"{stem}.csv", f"{stem}_summary.txt", inference_dump, grasping_dump
 
 
 def main():
@@ -176,13 +244,21 @@ def main():
     parser.add_argument('--classes', nargs='+',
                         default=['mug', 'box', 'can', 'bottle', 'cylindric', 'ball'],
                         help='object classes to evaluate (default: all 6 catalog classes)')
+    parser.add_argument('--mode', choices=['target', 'any'], default='target',
+                        help="grasp target: 'target' = the spawned class (target-driven, "
+                             "needs correct ICGNet classification); 'any' = class-agnostic "
+                             "(isolates segmentation+grasp from the classification step). "
+                             "Outputs go to separate _<mode>_ files (default: target)")
     args = parser.parse_args()
 
     rclpy.init()
     node = EvaluatorPhase1()
 
-    csv_path, summary_path = resolve_output_paths('report', args.runs_per_class, args.classes)
-    node.get_logger().info(f'Writing results to {csv_path}')
+    csv_path, summary_path, inference_dump, grasping_dump = resolve_output_paths(
+        'report', args.runs_per_class, args.classes, args.mode)
+    node.get_logger().info(
+        f'Writing results to {csv_path}\n  inference dump: {inference_dump}\n'
+        f'  grasping dump:  {grasping_dump}')
 
     total_runs = len(args.classes) * args.runs_per_class
     rows = []
@@ -200,10 +276,22 @@ def main():
                 node.get_logger().info(
                     f"========== RUN {run_id}/{total_runs}: Target={cls} ==========")
 
-                node.remove_target()
-                node.spawn_object(cls)
+                if not node.reset_target(cls):
+                    node.get_logger().error(
+                        f"Run {run_id}: could not place a fresh '{cls}' after "
+                        f"{RESET_MAX_TRIES} tries — logging SPAWN_FAIL, skipping grasp")
+                    writer.writerow([run_id, cls, '', 0, 0, 0, 0.0, 0.0, 0, 0,
+                                     'SPAWN_FAIL', '', ''])
+                    rows.append({'class': cls, 'success': False, 'attempts': 0,
+                                 'failure_reason': 'SPAWN_FAIL', 'attempt_reasons': [],
+                                 'attempt_scores': []})
+                    f.flush()
+                    continue
 
-                res = node.execute_grasp(cls)
+                # mode='target': require the spawned class; mode='any': accept any grasp on
+                # the (single) spawned object, removing the classification requirement.
+                grasp_target = 'any' if args.mode == 'any' else cls
+                res = node.execute_grasp(grasp_target, run_id, inference_dump, grasping_dump)
 
                 if res:
                     success = bool(res.success)
@@ -237,7 +325,7 @@ def main():
                 rows.append(row)
                 f.flush()
 
-    summary = write_summary(rows, summary_path)
+    summary = write_summary(rows, summary_path, args.mode)
     node.get_logger().info(f'\n{summary}')
     node.get_logger().info(f'Results: {csv_path}  |  Summary: {summary_path}')
 
