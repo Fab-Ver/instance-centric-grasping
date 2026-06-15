@@ -355,3 +355,4 @@ lib/
 # Output di debug / log sessione
 output_*.md
 image.png
+graphify-out/

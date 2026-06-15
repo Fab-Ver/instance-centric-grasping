@@ -1,0 +1,177 @@
+// ROS2 Computational Graph — ICGNet Pick-and-Place System (complete)
+// Compile: dot -Tpdf ros2_graph.dot -o images/ros2_graph.pdf
+//
+// Our custom nodes: icgnet_grasp_node, grasp_executor_node,
+//                   scene_visualizer, scene_manager
+// Layout: Simulation → Perception/Scene → Execution/Planning → Actuation
+
+digraph ros2_system {
+
+    rankdir=LR;
+    splines=spline;
+    nodesep=0.22;
+    ranksep=0.38;
+    fontname="Helvetica";
+    fontsize=7.5;
+
+    node [fontname="Helvetica", fontsize=7, style=filled, height=0.28, width=0.28];
+    edge [fontname="Helvetica", fontsize=6.5];
+
+    // ── Color legend ──────────────────────────────────────────────────────────
+    // Orange  (#ffcc80 / #e65100)  = OUR custom nodes
+    // Blue    (#aec6e8 / #4a7fbf)  = infrastructure / standard nodes
+    // Yellow  (#fff9c4 / #c8b400)  = topics
+    // Red-dashed                   = service calls (client→server)
+    // Grey                         = simulation / hardware
+
+    // ── Simulation ────────────────────────────────────────────────────────────
+    subgraph cluster_sim {
+        label="Gazebo Sim Fortress (DART)";
+        style=dashed; color=grey60; fontsize=7.5;
+        gazebo [label="Gazebo Sim\n(physics + sensors)", shape=box,
+                fillcolor="#d9d9d9", color=grey50];
+    }
+
+    gz_bridge [label="ros_gz_bridge", shape=ellipse,
+               fillcolor="#aec6e8", color="#4a7fbf"];
+
+    robot_state_pub [label="robot_state\npublisher", shape=ellipse,
+                     fillcolor="#aec6e8", color="#4a7fbf"];
+
+    // ── Topics from bridge ────────────────────────────────────────────────────
+    t_points  [label="/camera/rgbd_camera/\npoints (PointCloud2)",
+               shape=rect, fillcolor="#fff9c4", color="#c8b400"];
+    t_poses   [label="/model_poses\n(TFMessage)",
+               shape=rect, fillcolor="#fff9c4", color="#c8b400"];
+    t_jstates [label="/joint_states",
+               shape=rect, fillcolor="#fff9c4", color="#c8b400"];
+
+    // ── OUR CUSTOM NODES ──────────────────────────────────────────────────────
+    subgraph cluster_custom {
+        label="Custom ROS2 nodes (our code)";
+        style=bold; color="#e65100"; fontsize=7.5;
+
+        icgnet_node [label="icgnet_grasp_node\n(inference + collision pub)",
+                     shape=ellipse, fillcolor="#ffcc80", color="#e65100",
+                     penwidth=2];
+
+        executor_node [label="grasp_executor_node\n(pick-and-place FSM)",
+                       shape=ellipse, fillcolor="#ffcc80", color="#e65100",
+                       penwidth=2];
+
+        scene_viz [label="scene_visualizer\n(RViz mesh mirror)",
+                   shape=ellipse, fillcolor="#ffcc80", color="#e65100",
+                   penwidth=2];
+
+        scene_mgr [label="scene_manager\n(multi-object scene)",
+                   shape=ellipse, fillcolor="#ffcc80", color="#e65100",
+                   penwidth=2];
+    }
+
+    // ── Services (servers on custom nodes) ────────────────────────────────────
+    svc_exec   [label="/icgnet/execute_grasp\n(ExecuteGrasp srv)\n← operator trigger",
+                shape=diamond, fillcolor="#c8e6c9", color="#2e7d32"];
+
+    svc_infer  [label="/icgnet/compute_grasps\n(Trigger srv)",
+                shape=rect, fillcolor="#ffe0b2", color="#e65100",
+                style="filled,dashed"];
+
+    svc_reset  [label="/icgnet/reset_scene\n(Trigger srv)",
+                shape=rect, fillcolor="#ffe0b2", color="#e65100",
+                style="filled,dashed"];
+
+    // ── Topics produced by custom nodes ───────────────────────────────────────
+    t_grasps   [label="/icgnet/grasps_rich\n(GraspArray)",
+                shape=rect, fillcolor="#fff9c4", color="#c8b400"];
+    t_colobj   [label="/collision_object\n(CollisionObject)",
+                shape=rect, fillcolor="#fff9c4", color="#c8b400"];
+    t_manifest [label="/icgnet/scene_manifest\n(SceneManifest)",
+                shape=rect, fillcolor="#fff9c4", color="#c8b400"];
+    t_meshes   [label="/icgnet/scene_meshes\n(MarkerArray→RViz)",
+                shape=rect, fillcolor="#fff9c4", color="#c8b400"];
+
+    // ── Planning / Motion ─────────────────────────────────────────────────────
+    move_group [label="move_group\n(MoveIt2)", shape=ellipse,
+                fillcolor="#c8e6c9", color="#2e7d32"];
+
+    // ── Controllers + Robot ───────────────────────────────────────────────────
+    arm_ctrl  [label="panda_arm_controller\n(JTC, position)",
+               shape=ellipse, fillcolor="#aec6e8", color="#4a7fbf"];
+    hand_ctrl [label="panda_hand_controller\n(JTC, effort+PD)",
+               shape=ellipse, fillcolor="#aec6e8", color="#4a7fbf"];
+
+    panda [label="Franka Panda\n(7-DoF + gripper)", shape=box,
+           fillcolor="#d9d9d9", color=grey50];
+
+    rviz [label="RViz2", shape=box, fillcolor="#d9d9d9", color=grey50];
+
+    // ── Edges: Simulation → Bridge ────────────────────────────────────────────
+    gazebo    -> gz_bridge      [label="gz topics", style=dashed, color=grey60];
+    gz_bridge -> t_points       [];
+    gz_bridge -> t_poses        [];
+    gz_bridge -> t_jstates      [];
+
+    // ── Edges: Bridge → Inference ─────────────────────────────────────────────
+    t_points  -> icgnet_node    [label="sub"];
+
+    // ── Service: executor calls compute_grasps ────────────────────────────────
+    executor_node -> svc_infer  [label="call", style=dashed, color="#e65100"];
+    svc_infer     -> icgnet_node [style=dashed, color="#e65100"];
+
+    // ── Edges: Inference → outputs ────────────────────────────────────────────
+    icgnet_node -> t_grasps     [];
+    icgnet_node -> t_colobj     [];
+
+    // ── Edges: Into executor ──────────────────────────────────────────────────
+    t_grasps      -> executor_node [label="sub"];
+    t_poses       -> executor_node [label="sub\n(pose snapshot)"];
+    t_jstates     -> executor_node [label="sub\n(finger gap)"];
+    t_manifest    -> executor_node [label="sub\n(sweep mode)"];
+    svc_exec      -> executor_node [label="goal", color="#2e7d32",
+                                    style=dashed];
+
+    // ── Edges: Executor ↔ MoveIt2 ────────────────────────────────────────────
+    executor_node -> move_group [label="plan +\napply scene"];
+    t_colobj      -> move_group [label="planning\nscene (ADD)"];
+    move_group    -> executor_node [label="trajectory",
+                                    style=dashed, color="#2e7d32"];
+
+    // ── Edges: MoveIt2 → Controllers ─────────────────────────────────────────
+    move_group -> arm_ctrl   [label="FollowJoint\nTrajectory"];
+    move_group -> hand_ctrl  [label="FollowJoint\nTrajectory"];
+
+    arm_ctrl  -> panda       [label="position"];
+    hand_ctrl -> panda       [label="effort"];
+
+    panda -> gz_bridge       [label="fb", style=dashed, color=grey60];
+
+    // ── Edges: Scene manager ──────────────────────────────────────────────────
+    scene_mgr  -> t_manifest  [];
+    svc_reset  -> scene_mgr   [label="call\n(reset all\nposes)",
+                                style=dashed, color="#e65100"];
+    executor_node -> svc_reset [label="call\n(full reset)",
+                                 style=dashed, color="#e65100"];
+    scene_mgr  -> gz_bridge   [label="set_pose\n(spawn/reset)",
+                                style=dashed, color="#4a7fbf"];
+
+    // ── Edges: Scene visualizer ───────────────────────────────────────────────
+    t_poses    -> scene_viz    [label="sub"];
+    t_manifest -> scene_viz    [label="sub"];
+    scene_viz  -> t_meshes     [];
+    t_meshes   -> rviz         [];
+
+    // robot_state_pub → RViz (robot model)
+    t_jstates       -> robot_state_pub [];
+    robot_state_pub -> rviz            [label="TF + robot\nmodel"];
+
+    // ── Rank constraints ──────────────────────────────────────────────────────
+    { rank=same; gazebo; }
+    { rank=same; gz_bridge; }
+    { rank=same; t_points; t_poses; t_jstates; }
+    { rank=same; icgnet_node; scene_mgr; svc_exec; }
+    { rank=same; t_grasps; t_colobj; t_manifest; svc_infer; svc_reset; }
+    { rank=same; executor_node; scene_viz; }
+    { rank=same; move_group; t_meshes; }
+    { rank=same; arm_ctrl; hand_ctrl; rviz; }
+    { rank=same; panda; }
+}
