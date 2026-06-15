@@ -157,6 +157,11 @@ class GraspExecutorNode(Node):
         self.declare_parameter('move_timeout', 60.0)
         # Gripper is commanded directly via this controller action (no OMPL planning).
         self.declare_parameter('gripper_controller_action', '/panda_hand_controller/follow_joint_trajectory')
+        # Arm HOME on reset is forced via this controller action (no OMPL planning): OMPL
+        # refuses to plan home when a phantom CO overlaps a robot link at the start state,
+        # which would leave the arm stuck in the camera FOV and poison the next inference.
+        self.declare_parameter('arm_controller_action', '/panda_arm_controller/follow_joint_trajectory')
+        self.declare_parameter('home_move_duration', 3.0)
         # Trajectory duration for an open/close command; the hand PID holds force afterwards.
         # 1.0 s (not 0.6): the release at STEP 7 opens FROM an active grasp, so the effort
         # PID's integral term (charged toward closing) must invert before the fingers move.
@@ -204,6 +209,8 @@ class GraspExecutorNode(Node):
         self._inference_timeout = self.get_parameter('inference_timeout').get_parameter_value().double_value
         self._move_timeout = self.get_parameter('move_timeout').get_parameter_value().double_value
         self._gripper_controller_action = self.get_parameter('gripper_controller_action').get_parameter_value().string_value
+        self._arm_controller_action = self.get_parameter('arm_controller_action').get_parameter_value().string_value
+        self._home_move_duration = self.get_parameter('home_move_duration').get_parameter_value().double_value
         self._gripper_move_duration = self.get_parameter('gripper_move_duration').get_parameter_value().double_value
         self._release_open_tolerance = self.get_parameter('release_open_tolerance').get_parameter_value().double_value
         self._max_release_retries = self.get_parameter('max_release_retries').get_parameter_value().integer_value
@@ -245,6 +252,11 @@ class GraspExecutorNode(Node):
         self._gripper_traj_client = ActionClient(
             self, FollowJointTrajectory, self._gripper_controller_action,
             callback_group=cb_gripper,
+        )
+        # Direct arm controller client for the forced HOME on reset (bypasses OMPL).
+        self._arm_traj_client = ActionClient(
+            self, FollowJointTrajectory, self._arm_controller_action,
+            callback_group=cb_arm,
         )
 
         compute_svc = self.get_parameter('compute_grasp_service').get_parameter_value().string_value
@@ -398,16 +410,15 @@ class GraspExecutorNode(Node):
         self.get_logger().info('[RESET] Opening gripper...')
         self._gripper_open()
 
-        self.get_logger().info('[RESET] Moving arm to home...')
-        self._arm.move_to_configuration(
-            joint_positions=HOME_JOINT_POSITIONS,
-            joint_names=robot.joint_names(),
-        )
-        ok = self._arm.wait_until_executed(self._move_timeout)
-        if ok:
+        # HOME is FORCED via the direct arm controller (no OMPL): the arm must always end at
+        # home, even when a phantom CO overlaps a robot link (which makes OMPL refuse to
+        # plan). A stuck arm sits in the camera FOV and the next inference reconstructs it as
+        # a huge phantom CO that poisons every later plan — the crucial bug this prevents.
+        self.get_logger().info('[RESET] Forcing arm to home (direct controller)...')
+        if self._force_arm_home():
             self.get_logger().info('[RESET] Arm at home.')
         else:
-            self.get_logger().warn('[RESET] Arm home move failed (continuing anyway).')
+            self.get_logger().error('[RESET] FORCED home failed — arm controller unreachable.')
 
         # Teleport only between retry attempts. Before attempt 1 the object is already
         # at the position seen by inference — teleporting would move it away from the
@@ -470,13 +481,10 @@ class GraspExecutorNode(Node):
         self.get_logger().info('[FULL RESET] Opening gripper...')
         self._gripper_open()
 
-        self.get_logger().info('[FULL RESET] Moving arm to home...')
+        self.get_logger().info('[FULL RESET] Forcing arm to home (direct controller)...')
         self._arm.max_velocity = self._arm_default_velocity
         self._arm.max_acceleration = self._arm_default_acceleration
-        self._arm.move_to_configuration(
-            joint_positions=HOME_JOINT_POSITIONS, joint_names=robot.joint_names()
-        )
-        ok = self._arm.wait_until_executed(self._move_timeout)
+        ok = self._force_arm_home()
         self.get_logger().info(f'[FULL RESET] Arm at home: {ok}')
 
         self._active_co_id = None
@@ -513,13 +521,10 @@ class GraspExecutorNode(Node):
         self.get_logger().info('[PARTIAL RESET] Opening gripper...')
         self._gripper_open()
 
-        self.get_logger().info('[PARTIAL RESET] Moving arm to home...')
+        self.get_logger().info('[PARTIAL RESET] Forcing arm to home (direct controller)...')
         self._arm.max_velocity = self._arm_default_velocity
         self._arm.max_acceleration = self._arm_default_acceleration
-        self._arm.move_to_configuration(
-            joint_positions=HOME_JOINT_POSITIONS, joint_names=robot.joint_names()
-        )
-        ok = self._arm.wait_until_executed(self._move_timeout)
+        ok = self._force_arm_home()
         self.get_logger().info(f'[PARTIAL RESET] Arm at home: {ok}')
 
         self._active_co_id = None
@@ -1235,6 +1240,39 @@ class GraspExecutorNode(Node):
 
     def _gripper_close(self) -> bool:
         return self._gripper_move_to(self._gripper_closed_pos, 'close')
+
+    def _force_arm_home(self) -> bool:
+        """Drive the arm to HOME via a DIRECT FollowJointTrajectory to the arm controller,
+        bypassing MoveGroup/OMPL. OMPL refuses to plan home whenever a (phantom) collision
+        object overlaps a robot link at the start state, which leaves the arm stuck
+        mid-scene inside the camera FOV — where the next inference reconstructs it as a huge
+        phantom collision object that poisons all downstream planning. A direct joint
+        command always reaches HOME regardless of the collision scene, breaking the cascade.
+        """
+        if not self._arm_traj_client.wait_for_server(timeout_sec=2.0):
+            self.get_logger().warn("[HOME] arm controller action server unavailable")
+            return False
+        goal = FollowJointTrajectory.Goal()
+        goal.trajectory.joint_names = list(robot.joint_names())
+        point = JointTrajectoryPoint()
+        point.positions = [float(p) for p in HOME_JOINT_POSITIONS]
+        sec = int(self._home_move_duration)
+        point.time_from_start.sec = sec
+        point.time_from_start.nanosec = int((self._home_move_duration - sec) * 1e9)
+        goal.trajectory.points = [point]
+        send_fut = self._arm_traj_client.send_goal_async(goal)
+        if not self._wait_for_future(send_fut, self._move_timeout):
+            self.get_logger().warn("[HOME] send-goal timed out")
+            return False
+        goal_handle = send_fut.result()
+        if goal_handle is None or not goal_handle.accepted:
+            self.get_logger().warn("[HOME] goal rejected by controller")
+            return False
+        res_fut = goal_handle.get_result_async()
+        if not self._wait_for_future(res_fut, self._move_timeout):
+            self.get_logger().warn("[HOME] result timed out")
+            return False
+        return True
 
     def _fetch_co_from_scene(self, co_id: str):
         req = GetPlanningScene.Request()
