@@ -1,0 +1,48 @@
+============================================================
+PHASE 1 EVALUATION SUMMARY (single-object, mode=any)
+Grasp target = any (class-agnostic)
+============================================================
+
+Overall GSR: 71/180 = 39.4%
+
+Per-class GSR:
+  mug        1/30 = 3.3%
+  box        19/30 = 63.3%
+  can        24/30 = 80.0%
+  bottle     20/30 = 66.7%
+  cylindric  7/30 = 23.3%
+  ball       0/30 = 0.0%
+
+Avg attempts until success (successful runs): 1.85
+First-attempt successes: 44/71 (62.0% of successful runs)
+
+Failed runs by reason (run-level):
+    74 × PREGRASP_PLAN_FAIL
+    25 × GRASP_MISS
+     5 × LIFT_PLAN_FAIL
+     2 × UNKNOWN
+     2 × LIFT_DROP
+     1 × APPROACH_FAIL
+
+Failed attempts by reason (attempt-level, includes retries on successful runs):
+   423 × PREGRASP_PLAN_FAIL
+   108 × GRASP_MISS
+    29 × LIFT_PLAN_FAIL
+    18 × APPROACH_FAIL
+    13 × LIFT_DROP
+     2 × TRANSFER_DROP
+     1 × LOWER_PLAN_FAIL
+     1 × OBJECT_TIPPED
+
+Grasp-proposal scores by attempt outcome:
+  SUCCESS attempts: mean=0.681 min=0.000 max=0.970 (n=71)
+  FAILED  attempts: mean=0.628 min=0.000 max=0.971 (n=595)
+
+Best-proposal score per class (top candidate, attempt 1):
+  mug        mean=0.627 min=0.000 max=0.784 (n=29)
+  box        mean=0.421 min=0.000 max=0.637 (n=30)
+  can        mean=0.807 min=0.524 max=0.971 (n=30)
+  bottle     mean=0.884 min=0.798 max=0.964 (n=29)
+  cylindric  mean=0.583 min=0.467 max=0.784 (n=30)
+  ball       mean=0.567 min=0.459 max=0.764 (n=30)
+
