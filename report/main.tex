@@ -238,10 +238,16 @@ candidate is tried (Figure~\ref{fig:single} shows a typical single-object scene)
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=0.52\linewidth]{images/real_single_scenario.jpg}
-\caption{\textbf{Single-object scene} in RViz at the start of a run: the Panda arm at home, one target
-  object (a can), and the drop bin. ICGNet's reconstruction and grasps are published into this scene
-  before execution begins.}
+\begin{minipage}{0.49\columnwidth}\centering
+\includegraphics[width=\linewidth]{images/real_single_scenario.jpg}
+\end{minipage}\hfill
+\begin{minipage}{0.49\columnwidth}\centering
+\includegraphics[width=\linewidth]{images/reconstricted_single.png}
+\end{minipage}
+\caption{\textbf{Single-object scene} in RViz at the start of a run. \emph{Left:} the real scene---the
+  Panda arm at home, one target object (a can), and the drop bin. \emph{Right:} ICGNet's per-instance
+  reconstruction (red mesh) and the top-ranked 6-DoF grasp it proposes (gripper marker), published into
+  the scene before execution begins.}
 \label{fig:single}
 \end{figure}
 
