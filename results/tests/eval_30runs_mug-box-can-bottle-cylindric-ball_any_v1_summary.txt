@@ -1,9 +1,13 @@
 ============================================================
 PHASE 1 EVALUATION SUMMARY (single-object, mode=any)
 Grasp target = any (class-agnostic)
+NOTE: ball segment (run 151-180) REPLACED 2026-06-18 with the
+clean ball re-run (eval_30runs_ball_any_v0). The original ball
+segment was an over-segmented batch scoring 0/30; the re-run
+segments ball as a single instance and grasps it 8/30.
 ============================================================
 
-Overall GSR: 71/180 = 39.4%
+Overall GSR: 79/180 = 43.9%
 
 Per-class GSR:
   mug        1/30 = 3.3%
@@ -11,32 +15,39 @@ Per-class GSR:
   can        24/30 = 80.0%
   bottle     20/30 = 66.7%
   cylindric  7/30 = 23.3%
-  ball       0/30 = 0.0%
+  ball       8/30 = 26.7%
 
-Avg attempts until success (successful runs): 1.85
-First-attempt successes: 44/71 (62.0% of successful runs)
+Avg attempts until success (successful runs): 1.86
+First-attempt successes: 49/79 (62.0% of successful runs)
 
 Failed runs by reason (run-level):
-    74 × PREGRASP_PLAN_FAIL
-    25 × GRASP_MISS
+    55 × PREGRASP_PLAN_FAIL
+    34 × GRASP_MISS
      5 × LIFT_PLAN_FAIL
-     2 × UNKNOWN
+     2 × APPROACH_FAIL
      2 × LIFT_DROP
-     1 × APPROACH_FAIL
+     1 × OBJECT_TIPPED
+     2 × UNKNOWN (empty srv response)
 
 Failed attempts by reason (attempt-level, includes retries on successful runs):
-   423 × PREGRASP_PLAN_FAIL
-   108 × GRASP_MISS
-    29 × LIFT_PLAN_FAIL
-    18 × APPROACH_FAIL
+   342 × PREGRASP_PLAN_FAIL
+   147 × GRASP_MISS
+    30 × LIFT_PLAN_FAIL
+    21 × APPROACH_FAIL
     13 × LIFT_DROP
+     6 × OBJECT_TIPPED
      2 × TRANSFER_DROP
-     1 × LOWER_PLAN_FAIL
-     1 × OBJECT_TIPPED
+     2 × LOWER_PLAN_FAIL
 
 Grasp-proposal scores by attempt outcome:
-  SUCCESS attempts: mean=0.681 min=0.000 max=0.970 (n=71)
-  FAILED  attempts: mean=0.628 min=0.000 max=0.971 (n=595)
+  SUCCESS attempts (all):      mean=0.612 min=0.000 max=0.970 (n=79)
+  FAILED  attempts (all):      mean=0.514 min=0.000 max=0.971 (n=563)
+  SUCCESS attempts (non-ball): mean=0.681 min=0.000 max=0.970 (n=71)
+  FAILED  attempts (non-ball): mean=0.651 min=0.000 max=0.971 (n=445)
+  NOTE: ICGNet scores EVERY clean-ball grasp ~0.00006 (rounds to 0.000)
+  regardless of outcome -> ball drags the pooled means down and is
+  uninformative. The meaningful (weakly predictive, non-inverted)
+  comparison is non-ball: SUCCESS 0.681 > FAILED 0.651.
 
 Best-proposal score per class (top candidate, attempt 1):
   mug        mean=0.627 min=0.000 max=0.784 (n=29)
@@ -44,5 +55,11 @@ Best-proposal score per class (top candidate, attempt 1):
   can        mean=0.807 min=0.524 max=0.971 (n=30)
   bottle     mean=0.884 min=0.798 max=0.964 (n=29)
   cylindric  mean=0.583 min=0.467 max=0.784 (n=30)
-  ball       mean=0.567 min=0.459 max=0.764 (n=30)
+  ball       mean=0.000 min=0.000 max=0.000 (n=30)   <- score collapse on clean segmentation
 
+Ball detected-class distribution (pre-filter, class-agnostic):
+    16 × ball
+    10 × other
+     2 × ball;ball
+     1 × ball;ball;ball
+     1 × cylindric
