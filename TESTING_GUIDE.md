@@ -75,14 +75,6 @@ source /opt/ros/humble/setup.bash && source install/setup.bash
 ros2 launch icgnet_main world.launch.py
 ```
 
-**With GPU (WSL2 + NVIDIA):**
-
-```bash
-cd ~/instance-centric-grasping
-source /opt/ros/humble/setup.bash && source install/setup.bash
-ros2 launch icgnet_main world.launch.py
-```
-
 > **Gazebo headless (default `headless:=true`, 2026-06-09)**: no GUI gz window. RViz is the only
 > visualization — object meshes are mirrored live by `scene_visualizer` on `/icgnet/scene_meshes`.
 > Pass `headless:=false` to restore the gz GUI for physics debugging.
