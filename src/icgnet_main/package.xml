@@ -3,8 +3,8 @@
 <package format="3">
   <name>icgnet_main</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
-  <maintainer email="burger@todo.todo">burger</maintainer>
+  <description>ICGNet main package — inference, grasp execution, Gazebo integration</description>
+  <maintainer email="f.veroli26@gmail.com">Fabio Veroli</maintainer>
   <license>TODO: License declaration</license>
 
   <depend>rclpy</depend>

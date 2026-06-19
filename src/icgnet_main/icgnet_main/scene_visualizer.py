@@ -104,7 +104,7 @@ class SceneVisualizerNode(Node):
             f'on /icgnet/scene_meshes (defs republished at {_REPUBLISH_HZ:.0f} Hz).'
         )
 
-    # ── subscription callbacks ─────────────────────────────────────────────────
+    # subscription callbacks
 
     def _model_poses_cb(self, msg: TFMessage):
         now = self.get_clock().now().to_msg()
@@ -145,7 +145,7 @@ class SceneVisualizerNode(Node):
             + ', '.join(f'{o.entity_name}({o.model_name})' for o in msg.objects)
         )
 
-    # ── geometry spec (lazy, cached) ───────────────────────────────────────────
+    # geometry spec (lazy, cached)
 
     def _get_geom_spec(self, model_name: str) -> dict | None:
         with self._geom_lock:
@@ -164,7 +164,7 @@ class SceneVisualizerNode(Node):
             self._geom_cache[model_name] = spec
         return spec
 
-    # ── marker builders ────────────────────────────────────────────────────────
+    # marker builders
 
     def _build_entity_marker(
         self,
@@ -266,7 +266,7 @@ class SceneVisualizerNode(Node):
             markers.append(m)
         return markers
 
-    # ── timer: republish static marker definitions + bin + DELETE handling ──────
+    # timer: republish static marker definitions + bin + DELETE handling
 
     def _publish_markers(self):
         stamp = self.get_clock().now().to_msg()

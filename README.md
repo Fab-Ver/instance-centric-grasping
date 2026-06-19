@@ -64,12 +64,6 @@ icgnet_grasp_node:
     icgnet_repo_path: "~/icg_net"
 ```
 
-### 1.4 Download Gazebo object models
-
-```bash
-python3 scripts/download_gazebo_models.py
-```
-
 ---
 
 ## 2. Build
@@ -178,7 +172,6 @@ Grasp arrows appear in RViz on `/icgnet/grasps_markers` (green = high score, red
 ### Expected grasp log sequence
 
 ```
-[SPAWN_POSE] Object spawn pose received: (0.65, 0.00, 0.052)
 [INSTANCES] 1 instance(s): inst_0=can(id=2, 353g) | total_grasps=353
 [FILTER]  total=353 → kept=353 (scores=[0.30–0.81]) | rejected: width=0 workspace=0 target=0
 [PLAN]    score=0.807  inst=0  cls=2(can)  width=0.0660m
@@ -236,9 +229,9 @@ ros2 service call /world/icgnet_world/set_pose ros_gz_interfaces/srv/SetEntityPo
 
 ---
 
-## 6. Phase 1 evaluation — automated single-object benchmark
+## 6. Evaluation — automated single-object benchmark
 
-`scripts/run_evaluation_phase1.py` drives the full grasp pipeline automatically across many runs, one object
+`scripts/run_evaluation.py` drives the full grasp pipeline automatically across many runs, one object
 class at a time. It spawns one object, calls `/icgnet/execute_grasp`, and logs the
 outcome plus the per-attempt failure reason.
 
@@ -256,11 +249,11 @@ ros2 topic echo /model_poses --once   # must print a TFMessage
 source /opt/ros/humble/setup.bash && source install/setup.bash
 
 # Default: 6 classes × 20 runs, target-driven
-./scripts/run_evaluation_phase1.py
+./scripts/run_evaluation.py
 
 # Quick subset / class-agnostic mode:
-./scripts/run_evaluation_phase1.py --runs-per-class 30 --classes can ball
-./scripts/run_evaluation_phase1.py --runs-per-class 30 --mode any
+./scripts/run_evaluation.py --runs-per-class 30 --classes can ball
+./scripts/run_evaluation.py --runs-per-class 30 --mode any
 ```
 
 | Option | Default | Meaning |
@@ -276,5 +269,6 @@ flushed every run, so it stays usable if the batch is interrupted.
 
 **Failure-mode codes** (`Failure_Reason` / `Attempt_Reasons`): `SUCCESS`, `PERCEPTION_NO_GRASP`,
 `PREGRASP_PLAN_FAIL`, `APPROACH_FAIL`, `GRASP_MISS`, `OBJECT_TIPPED`, `LIFT_PLAN_FAIL`, `LIFT_DROP`,
-`TRANSFER_PLAN_FAIL`, `TRANSFER_DROP`, `LOWER_PLAN_FAIL`, `LOWER_DROP`, `PLACE_ROLLOUT`, `SPAWN_FAIL`.
+`OBJECT_SLIPPED`, `TRANSFER_PLAN_FAIL`, `TRANSFER_DROP`, `LOWER_PLAN_FAIL`, `LOWER_DROP`, `PLACE_ROLLOUT`,
+`RELEASE_FAIL`, `SPAWN_FAIL`.
 

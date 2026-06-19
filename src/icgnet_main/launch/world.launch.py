@@ -41,7 +41,7 @@ def generate_launch_description():
             default_value='true',
             description=(
                 'Launch the RViz visualization stack (RViz + scene_visualizer). '
-                'Set false for headless automated runs (e.g. run_evaluation_phase1.py) to speed them up.'
+                'Set false for headless automated runs (e.g. run_evaluation.py) to speed them up.'
             ),
         ),
 
@@ -90,7 +90,7 @@ def generate_launch_description():
                 '/camera/rgbd_camera/camera_info@sensor_msgs/msg/CameraInfo[ignition.msgs.CameraInfo',
                 # gz-sim entity services for spawn_object + grasp_executor reset_scene
                 '/world/icgnet_world/set_pose@ros_gz_interfaces/srv/SetEntityPose',
-                # Entity removal — used by the Phase 1 evaluator to clear the scene between runs
+                # Entity removal — used by the evaluation script to clear the scene between runs
                 '/world/icgnet_world/remove@ros_gz_interfaces/srv/DeleteEntity',
                 # Model poses: child_frame_id = model name; used by grasp_executor for
                 # physical success check (_object_in_bin). Remapped to /model_poses for brevity.

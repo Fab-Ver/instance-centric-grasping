@@ -9,9 +9,10 @@ from ament_index_python.packages import get_package_share_directory
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 
-from icgnet_msgs.msg import SceneManifest, SceneObject
+from icgnet_msgs.msg import SceneManifest
 from icgnet_main.scene_utils import (
-    find_model_sdf, get_random_pose, half_height_from_sdf, load_catalog, spawn_gz_entity,
+    find_model_sdf, get_random_pose, half_height_from_sdf, load_catalog,
+    scene_object_from_entry, spawn_gz_entity,
 )
 
 
@@ -58,7 +59,7 @@ class ObjectSpawner(Node):
 
         # Resolve target model name
         if self.target_type:
-            # Legacy: exact model name supplied
+            # Exact model name supplied — takes precedence over target_class.
             self._resolved_target = self.target_type
         elif self.target_class in self.catalog:
             self._resolved_target = random.choice(self.catalog[self.target_class]['models'])
@@ -169,17 +170,7 @@ class ObjectSpawner(Node):
         manifest = SceneManifest()
         manifest.header.frame_id = 'world'
         for entry in self._spawned_entries:
-            obj = SceneObject()
-            obj.entity_name = entry['entity_name']
-            obj.model_name = entry['model_name']
-            obj.semantic_class = entry['semantic_class']
-            obj.pose.position.x = float(entry['x'])
-            obj.pose.position.y = float(entry['y'])
-            obj.pose.position.z = float(entry['z'])
-            half_yaw = float(entry['yaw']) / 2.0
-            obj.pose.orientation.z = math.sin(half_yaw)
-            obj.pose.orientation.w = math.cos(half_yaw)
-            manifest.objects.append(obj)
+            manifest.objects.append(scene_object_from_entry(entry))
         self._manifest_viz_pub.publish(manifest)
         self.get_logger().info(
             f'[VIZ_MANIFEST] Published {len(manifest.objects)} entity/-ies to /icgnet/scene_manifest_viz.'

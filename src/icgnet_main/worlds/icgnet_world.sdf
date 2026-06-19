@@ -47,7 +47,7 @@
     <!-- GUI: initial camera viewport (user-facing, NOT the perception RGBD sensor at line below).
          MinimalScene + GzSceneManager are the minimum Fortress plugins for a visible 3D window.
          engine=ogre must match render-engine ogre passed in gazebo.launch.py (WSL2/OGRE1).
-         camera_pose: x y z  roll pitch yaw (m / rad) — frames braccio + zona presa (x≈0.65) + bin.
+         camera_pose: x y z  roll pitch yaw (m / rad) — frames the arm + grasp zone (x≈0.65) + bin.
          Refine interactively: move camera in GUI, read the values, update camera_pose here. -->
     <gui fullscreen="0">
       <plugin filename="MinimalScene" name="3D View">
@@ -138,8 +138,9 @@
             </clip>
           </camera>
           <always_on>1</always_on>
-          <!-- 1 Hz is sufficient: ICGNet inference is on-demand (uses last frame on /trigger).
-               Higher rates in software rendering (WSL2) kill RTF → arm moves appear frozen. -->
+          <!-- 15 Hz: inference is on-demand (uses the last frame on /trigger), so the rate only
+               needs to keep the cloud fresh; kept modest because higher rates in software
+               rendering (WSL2) kill RTF → arm moves appear frozen. -->
           <update_rate>15</update_rate>
           <visualize>false</visualize>
           <!-- Topic base: publishes to /camera/rgbd_camera/{image,depth_image,points,camera_info} -->
@@ -205,27 +206,6 @@
         </visual>
       </link>
     </model>
-
-    <!-- TABLE DISABLED — uncomment to re-enable
-    <model name="grasp_table">
-      <static>true</static>
-      <pose>0.65 0.0 0.025 0 0 0</pose>
-      <link name="table_link">
-        <collision name="collision">
-          <geometry><box><size>0.8 0.8 0.05</size></box></geometry>
-          <surface>
-            <friction>
-              <ode><mu>1.0</mu><mu2>1.0</mu2></ode>
-            </friction>
-          </surface>
-        </collision>
-        <visual name="visual">
-          <geometry><box><size>0.8 0.8 0.05</size></box></geometry>
-          <material><ambient>0.6 0.4 0.2 1</ambient></material>
-        </visual>
-      </link>
-    </model>
-    -->
 
   </world>
 </sdf>

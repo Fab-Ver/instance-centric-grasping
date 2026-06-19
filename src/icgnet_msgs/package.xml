@@ -4,7 +4,7 @@
   <name>icgnet_msgs</name>
   <version>0.0.0</version>
   <description>Custom ROS2 messages and services for ICGNet grasp pipeline.</description>
-  <maintainer email="burger@todo.todo">burger</maintainer>
+  <maintainer email="">Fabio Veroli</maintainer>
   <license>TODO: License declaration</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>

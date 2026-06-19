@@ -22,9 +22,11 @@ from ros_gz_interfaces.msg import Entity
 from ros_gz_interfaces.srv import SetEntityPose
 from std_srvs.srv import Trigger
 
-from icgnet_msgs.msg import SceneManifest, SceneObject
+from icgnet_msgs.msg import SceneManifest
+from icgnet_main.ros_utils import wait_for_future
 from icgnet_main.scene_utils import (
-    find_model_sdf, get_random_pose, half_height_from_sdf, load_catalog, spawn_gz_entity,
+    find_model_sdf, get_random_pose, half_height_from_sdf, load_catalog,
+    scene_object_from_entry, spawn_gz_entity, yaw_to_quat_zw,
 )
 
 
@@ -111,7 +113,7 @@ class SceneManagerNode(Node):
         self.get_logger().info('Waiting 5 s for Gazebo to be ready...')
         time.sleep(5.0)
 
-        # ── Target objects ────────────────────────────────────────────────────
+        # Target objects
         target_models = self._catalog[self._target_class]['models']
         target_class_id = self._catalog[self._target_class]['class_id']
 
@@ -147,7 +149,7 @@ class SceneManagerNode(Node):
                 )
             time.sleep(0.5)
 
-        # ── Distractors — from classes OTHER than target ───────────────────────
+        # Distractors — from classes OTHER than target
         n_distractors = (
             self._distractor_count if self._distractor_count >= 0
             else random.choice([2, 3])
@@ -216,27 +218,8 @@ class SceneManagerNode(Node):
         manifest.header.stamp = self.get_clock().now().to_msg()
         manifest.header.frame_id = 'world'
         for entry in registry:
-            obj = SceneObject()
-            obj.entity_name = entry['entity_name']
-            obj.model_name = entry['model_name']
-            obj.semantic_class = entry['semantic_class']
-            obj.pose.position.x = entry['x']
-            obj.pose.position.y = entry['y']
-            obj.pose.position.z = entry['z']
-            # Encode yaw as quaternion (rotation about Z)
-            half_yaw = entry['yaw'] / 2.0
-            obj.pose.orientation.z = math.sin(half_yaw)
-            obj.pose.orientation.w = math.cos(half_yaw)
-            manifest.objects.append(obj)
+            manifest.objects.append(scene_object_from_entry(entry))
         self._manifest_pub.publish(manifest)
-
-    def _wait_for_future(self, future, timeout: float = 5.0) -> bool:
-        deadline = time.time() + timeout
-        while not future.done():
-            if time.time() > deadline:
-                return False
-            time.sleep(0.02)
-        return True
 
     def _reset_scene_cb(self, req: Trigger.Request, res: Trigger.Response):
         """Teleport every spawned entity back to its original pose."""
@@ -261,12 +244,10 @@ class SceneManagerNode(Node):
             set_req.pose.position.x = entry['x']
             set_req.pose.position.y = entry['y']
             set_req.pose.position.z = entry['z']
-            half_yaw = entry['yaw'] / 2.0
-            set_req.pose.orientation.z = math.sin(half_yaw)
-            set_req.pose.orientation.w = math.cos(half_yaw)
+            set_req.pose.orientation.z, set_req.pose.orientation.w = yaw_to_quat_zw(entry['yaw'])
 
             fut = self._set_entity_client.call_async(set_req)
-            if not self._wait_for_future(fut, timeout=5.0):
+            if not wait_for_future(fut, timeout=5.0):
                 failed.append(entry['entity_name'])
                 self.get_logger().warn(
                     f"[RESET] SetEntityPose timed out for '{entry['entity_name']}'"

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Phase 1 evaluation — single-object grasping.
+"""Single-object grasp evaluation.
 
-Scope (2026-06-13): ICGNet mis-segments multi-object scenes (documented domain gap),
-so evaluation runs on ONE object at a time, no distractors. Each run spawns a single
+ICGNet mis-segments multi-object scenes (a documented domain gap), so evaluation
+runs on ONE object at a time, no distractors. Each run spawns a single
 object of the target class, triggers a grasp, and logs the outcome plus the per-attempt
 failure reason reported by grasp_executor.
 
@@ -15,9 +15,9 @@ Each class maps to exactly one model in catalog.yaml, so target_class spawn is
 deterministic (no per-run model variance to confound the metrics).
 
 Usage:
-  ./scripts/run_evaluation_phase1.py                      # 20 runs/class, all 6 classes
-  ./scripts/run_evaluation_phase1.py --runs-per-class 10
-  ./scripts/run_evaluation_phase1.py --classes can ball --runs-per-class 5
+  ./scripts/run_evaluation.py                      # 20 runs/class, all 6 classes
+  ./scripts/run_evaluation.py --runs-per-class 10
+  ./scripts/run_evaluation.py --classes can ball --runs-per-class 5
 """
 import os
 import re
@@ -39,9 +39,9 @@ ENTITY_WAIT_TIMEOUT = 8.0   # max wall-time to confirm a remove/spawn took effec
 RESET_MAX_TRIES = 3         # remove+spawn cycles before giving up on a run
 
 
-class EvaluatorPhase1(Node):
+class Evaluator(Node):
     def __init__(self):
-        super().__init__('evaluator_phase1')
+        super().__init__('grasp_evaluator')
         self.client = self.create_client(ExecuteGrasp, '/icgnet/execute_grasp')
         while not self.client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('Waiting for /icgnet/execute_grasp service...')
@@ -152,7 +152,7 @@ def write_summary(rows, summary_path, mode):
                 attempt_failures[code] += 1
 
     grasp_target = 'any (class-agnostic)' if mode == 'any' else 'spawned class (target-driven)'
-    lines = ['=' * 60, f'PHASE 1 EVALUATION SUMMARY (single-object, mode={mode})',
+    lines = ['=' * 60, f'EVALUATION SUMMARY (single-object, mode={mode})',
              f'Grasp target = {grasp_target}', '=' * 60, '']
 
     total_succ = sum(1 for r in rows if r['success'])
@@ -238,7 +238,7 @@ def resolve_output_paths(report_dir, runs_per_class, classes, mode):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Phase 1 single-object grasp evaluation')
+    parser = argparse.ArgumentParser(description='Single-object grasp evaluation')
     parser.add_argument('--runs-per-class', type=int, default=20,
                         help='number of runs per object class (default: 20)')
     parser.add_argument('--classes', nargs='+',
@@ -252,7 +252,7 @@ def main():
     args = parser.parse_args()
 
     rclpy.init()
-    node = EvaluatorPhase1()
+    node = Evaluator()
 
     csv_path, summary_path, inference_dump, grasping_dump = resolve_output_paths(
         'results/tests', args.runs_per_class, args.classes, args.mode)

@@ -58,7 +58,7 @@ class ICGNetPredictor:
                        separation, so this should NOT be voxel-downsampled.
         :param normals: numpy array (N, 3) of normals for ``points``.
         :param grasp_points: numpy array (M, 3) — sparse cloud used only for grasp-point
-                       sampling. Defaults to ``points`` if None (legacy single-cloud mode).
+                       sampling. Defaults to ``points`` if None.
         :param grasp_normals: normals for ``grasp_points`` (defaults to ``normals``).
         :param n_grasps: number of grasps to generate.
         :param return_meshes: if True, run marching cubes per instance and populate

@@ -1,5 +1,6 @@
 import json
 import time
+from collections import defaultdict
 from threading import Lock, Thread
 
 import numpy as np
@@ -30,9 +31,23 @@ from pymoveit2.robots import panda as robot
 from icgnet_msgs.msg import GraspArray, SceneManifest
 from icgnet_msgs.srv import ExecuteGrasp
 from icgnet_main.pointcloud_utils import gripper_keypoints_world
+from icgnet_main.ros_utils import read_workspace_bounds, wait_for_future
 
 # Compact home configuration matching the URDF initial_value parameters
 HOME_JOINT_POSITIONS = [0.0, -1.0, 0.0, -2.5, 0.0, 2.0, 0.785]
+
+# Wall-clock pauses (seconds) for move_group scene sync and post-action settling.
+MOVE_GROUP_SETTLE_S = 0.15           # let move_group process a CO ADD/REMOVE before planning
+GRASP_WAIT_TIMEOUT_S = 5.0           # max wait for a fresh GraspArray after inference
+GRASP_POLL_S = 0.1                   # poll interval while waiting for that GraspArray
+SETTLE_AFTER_RELEASE_S = 1.0         # let objects settle after the last gripper release
+UNDISTURBED_TELEPORT_DIST_M = 0.03   # skip teleport if the object moved less than this
+WIDTH_MISMATCH_TOL_M = 0.002         # log a gripper-width mismatch above this
+
+
+def _approach_axis(quat_xyzw) -> np.ndarray:
+    """World approach axis (gripper +Z column) from a grasp quaternion [x, y, z, w]."""
+    return Rotation.from_quat(quat_xyzw).as_matrix()[:, 2]
 
 SEMANTIC_CLASSES = {
     'mug': 0, 'box': 1, 'can': 2, 'bottle': 3,
@@ -104,19 +119,12 @@ class GraspExecutorNode(Node):
         self._object_init_x = self.get_parameter('object_init_x').get_parameter_value().double_value
         self._object_init_y = self.get_parameter('object_init_y').get_parameter_value().double_value
         self._object_init_z = self.get_parameter('object_init_z').get_parameter_value().double_value
-        self._workspace_bounds = {
-            'x': (self.get_parameter('workspace_x_min').get_parameter_value().double_value,
-                  self.get_parameter('workspace_x_max').get_parameter_value().double_value),
-            'y': (self.get_parameter('workspace_y_min').get_parameter_value().double_value,
-                  self.get_parameter('workspace_y_max').get_parameter_value().double_value),
-            'z': (self.get_parameter('workspace_z_min').get_parameter_value().double_value,
-                  self.get_parameter('workspace_z_max').get_parameter_value().double_value),
-        }
+        self._workspace_bounds = read_workspace_bounds(self)
 
         self.declare_parameter('use_collision_scene', True)
         self.declare_parameter('attach_weight', 0.35)
 
-        # ── Pick-and-place ────────────────────────────────────────────────────
+        # Pick-and-place
         self.declare_parameter('place_x', 0.45)
         self.declare_parameter('place_y', -0.50)
         self.declare_parameter('place_release_z', 0.26)
@@ -151,7 +159,7 @@ class GraspExecutorNode(Node):
         # Wall-clock cap per arm/gripper move. The arm JTC runs with goal_time=0.0 (never
         # aborts), so a goal that never settles would block wait_until_executed forever and
         # freeze the whole execute_grasp callback. On timeout the move is cancelled and
-        # treated as a failure, so an unattended batch (run_evaluation_phase1.py) keeps going.
+        # treated as a failure, so an unattended batch (run_evaluation.py) keeps going.
         self.declare_parameter('move_timeout', 60.0)
         # Gripper is commanded directly via this controller action (no OMPL planning).
         self.declare_parameter('gripper_controller_action', '/panda_hand_controller/follow_joint_trajectory')
@@ -401,7 +409,7 @@ class GraspExecutorNode(Node):
                 # CO may still be in the scene (e.g. Step-1 failure before fetch).
                 self._active_co = self._fetch_co_from_scene(self._active_co_id)
             self._remove_co_from_scene(self._active_co_id)
-            time.sleep(0.15)  # let move_group process REMOVE before planning
+            time.sleep(MOVE_GROUP_SETTLE_S)  # let move_group process REMOVE before planning
 
         self.get_logger().info('[RESET] Opening gripper...')
         self._gripper_open()
@@ -436,7 +444,7 @@ class GraspExecutorNode(Node):
             # and shift it away from the grasp poses ICGNet predicted.
             with self._object_pose_lock:
                 cur = self._object_pose
-            if cur is not None and np.hypot(cur.x - rx, cur.y - ry) < 0.03:
+            if cur is not None and np.hypot(cur.x - rx, cur.y - ry) < UNDISTURBED_TELEPORT_DIST_M:
                 self.get_logger().info(
                     '[RESET] Object undisturbed (<3cm from target) — skipping teleport.'
                 )
@@ -449,7 +457,7 @@ class GraspExecutorNode(Node):
                 req.pose.position.z = rz
                 req.pose.orientation.w = 1.0
                 fut = self._set_entity_client.call_async(req)
-                if not self._wait_for_future(fut):
+                if not wait_for_future(fut):
                     self.get_logger().warn('[RESET] Object reset timed out.')
                 elif fut.result().success:
                     self.get_logger().info(
@@ -472,7 +480,7 @@ class GraspExecutorNode(Node):
             if self._active_co is None:
                 self._active_co = self._fetch_co_from_scene(self._active_co_id)
             self._remove_co_from_scene(self._active_co_id)
-            time.sleep(0.15)
+            time.sleep(MOVE_GROUP_SETTLE_S)
 
         self.get_logger().info('[FULL RESET] Opening gripper...')
         self._gripper_open()
@@ -488,7 +496,7 @@ class GraspExecutorNode(Node):
 
         if self._reset_scene_client.wait_for_service(timeout_sec=3.0):
             fut = self._reset_scene_client.call_async(Trigger.Request())
-            if self._wait_for_future(fut, timeout=30.0) and fut.result() is not None:
+            if wait_for_future(fut, timeout=30.0) and fut.result() is not None:
                 self.get_logger().info(
                     f'[FULL RESET] Scene reset: {fut.result().message}'
                 )
@@ -499,7 +507,7 @@ class GraspExecutorNode(Node):
                 f'[FULL RESET] {self._reset_scene_svc_name} not available — objects not reset.'
             )
 
-    def _partial_reset_for_instance(self, grasp, manifest: SceneManifest) -> None:
+    def _partial_reset_for_instance(self, manifest: SceneManifest) -> None:
         """Arm home + gripper open + teleport ALL manifest entities not yet in the bin.
 
         Resets the entire scene (except objects already placed in the bin) so that
@@ -512,7 +520,7 @@ class GraspExecutorNode(Node):
             if self._active_co is None:
                 self._active_co = self._fetch_co_from_scene(self._active_co_id)
             self._remove_co_from_scene(self._active_co_id)
-            time.sleep(0.15)
+            time.sleep(MOVE_GROUP_SETTLE_S)
 
         self.get_logger().info('[PARTIAL RESET] Opening gripper...')
         self._gripper_open()
@@ -544,7 +552,7 @@ class GraspExecutorNode(Node):
             req.entity.type = Entity.MODEL
             req.pose = obj.pose
             fut = self._set_entity_client.call_async(req)
-            if not self._wait_for_future(fut):
+            if not wait_for_future(fut):
                 self.get_logger().warn(
                     f"[PARTIAL RESET] Teleport timed out for '{obj.entity_name}'"
                 )
@@ -568,7 +576,7 @@ class GraspExecutorNode(Node):
         often cannot plan a pre-grasp for (the PREGRASP_PLAN_FAIL failure mode).
         """
         q = g.pose.orientation
-        approach = Rotation.from_quat([q.x, q.y, q.z, q.w]).as_matrix()[:, 2]
+        approach = _approach_axis([q.x, q.y, q.z, q.w])
         inclination = float(np.degrees(np.arccos(np.clip(-approach[2], -1.0, 1.0))))
         p = g.pose.position
         return [p.x, p.y, p.z], [float(a) for a in approach], inclination
@@ -680,7 +688,7 @@ class GraspExecutorNode(Node):
 
         t_plan_start = time.time()
         future = self._compute_client.call_async(Trigger.Request())
-        if not self._wait_for_future(future, timeout=self._inference_timeout):
+        if not wait_for_future(future, timeout=self._inference_timeout):
             res.success = False
             res.message = f"ICGNet inference timed out after {self._inference_timeout:.0f}s"
             return res
@@ -689,14 +697,14 @@ class GraspExecutorNode(Node):
             res.message = f"ICGNet inference failed: {future.result().message}"
             return res
 
-        deadline = time.time() + 5.0
+        deadline = time.time() + GRASP_WAIT_TIMEOUT_S
         grasps = None
         while time.time() < deadline:
             with self._grasps_lock:
                 grasps = self._latest_grasps
             if grasps is not None:
                 break
-            time.sleep(0.1)
+            time.sleep(GRASP_POLL_S)
 
         res.planning_time = time.time() - t_plan_start
         res.target_not_found = False
@@ -740,7 +748,7 @@ class GraspExecutorNode(Node):
         )
         for i, g in enumerate(candidates):
             q = g.pose.orientation
-            approach = Rotation.from_quat([q.x, q.y, q.z, q.w]).as_matrix()[:, 2]
+            approach = _approach_axis([q.x, q.y, q.z, q.w])
             angle_from_vertical = float(np.degrees(np.arccos(np.clip(-approach[2], -1.0, 1.0))))
             p = g.pose.position
             self.get_logger().info(
@@ -870,7 +878,7 @@ class GraspExecutorNode(Node):
             return res
 
         future = self._compute_client.call_async(Trigger.Request())
-        if not self._wait_for_future(future, timeout=self._inference_timeout):
+        if not wait_for_future(future, timeout=self._inference_timeout):
             res.success = False
             res.message = f"ICGNet inference timed out after {self._inference_timeout:.0f}s"
             return res
@@ -879,14 +887,14 @@ class GraspExecutorNode(Node):
             res.message = f"ICGNet inference failed: {future.result().message}"
             return res
 
-        deadline = time.time() + 5.0
+        deadline = time.time() + GRASP_WAIT_TIMEOUT_S
         grasps = None
         while time.time() < deadline:
             with self._grasps_lock:
                 grasps = self._latest_grasps
             if grasps is not None:
                 break
-            time.sleep(0.1)
+            time.sleep(GRASP_POLL_S)
 
         if grasps is None or len(grasps.grasps) == 0:
             res.success = False
@@ -931,7 +939,6 @@ class GraspExecutorNode(Node):
             return res
 
         # Group grasps by instance_id; order instances by best score (descending).
-        from collections import defaultdict
         instance_grasps: dict[int, list] = defaultdict(list)
         for g in candidates:
             instance_grasps[g.instance_id].append(g)
@@ -954,7 +961,7 @@ class GraspExecutorNode(Node):
             req = GetPlanningScene.Request()
             req.components.components = PlanningSceneComponents.WORLD_OBJECT_GEOMETRY
             fut = self._get_scene_client.call_async(req)
-            if self._wait_for_future(fut):
+            if wait_for_future(fut):
                 for co in fut.result().scene.world.collision_objects:
                     if co.id.startswith(self._collision_id_prefix):
                         try:
@@ -966,7 +973,7 @@ class GraspExecutorNode(Node):
                 if co is not None:
                     self._remove_co_from_scene(co.id)
             if inst_cos:
-                time.sleep(0.15)
+                time.sleep(MOVE_GROUP_SETTLE_S)
 
         total_attempted = 0
         for slot_idx, inst_id in enumerate(instances):
@@ -983,7 +990,7 @@ class GraspExecutorNode(Node):
                     # Partial reset: a failed attempt may have knocked the object away from
                     # the inference position.  Teleport only this instance's entity back to
                     # its spawn pose — objects already placed in the bin are not disturbed.
-                    self._partial_reset_for_instance(g, manifest)
+                    self._partial_reset_for_instance(manifest)
 
                 # Restore only the active instance CO so pre-grasp planning is unobstructed.
                 if self._use_collision_scene and inst_cos:
@@ -1023,7 +1030,7 @@ class GraspExecutorNode(Node):
 
         # Ground-truth check: every target entity from the manifest must be in the bin.
         if not skip_place:
-            time.sleep(1.0)  # let objects settle after last release
+            time.sleep(SETTLE_AFTER_RELEASE_S)  # let objects settle after last release
             target_class_id = SEMANTIC_CLASSES.get(target)
             target_entity_names = [
                 o.entity_name for o in manifest.objects
@@ -1097,7 +1104,7 @@ class GraspExecutorNode(Node):
             # exhausts the planning timeout.  Top-down grasps add approach_offset along
             # z so they always clear this threshold.
             q = g.pose.orientation
-            approach_z = Rotation.from_quat([q.x, q.y, q.z, q.w]).as_matrix()[2, 2]
+            approach_z = _approach_axis([q.x, q.y, q.z, q.w])[2]
             pre_pos_z = p.z - self._approach_offset * approach_z
             if pre_pos_z < self._pre_pos_z_min:
                 n_low += 1
@@ -1191,14 +1198,6 @@ class GraspExecutorNode(Node):
         ma.markers.append(clear)
         self._current_grasp_pub.publish(ma)
 
-    def _wait_for_future(self, future, timeout: float = 5.0) -> bool:
-        deadline = time.time() + timeout
-        while not future.done():
-            if time.time() > deadline:
-                return False
-            time.sleep(0.02)
-        return True
-
     def _gripper_move_to(self, per_finger_pos: float, label: str) -> bool:
         """Command both finger joints to per_finger_pos via a direct FollowJointTrajectory
         goal to the hand controller, bypassing MoveGroup/OMPL (whose collision check on the
@@ -1218,7 +1217,7 @@ class GraspExecutorNode(Node):
         point.time_from_start.nanosec = int((self._gripper_move_duration - sec) * 1e9)
         goal.trajectory.points = [point]
         send_fut = self._gripper_traj_client.send_goal_async(goal)
-        if not self._wait_for_future(send_fut, self._move_timeout):
+        if not wait_for_future(send_fut, self._move_timeout):
             self.get_logger().warn(f"[GRIPPER] {label}: send-goal timed out")
             return False
         goal_handle = send_fut.result()
@@ -1226,7 +1225,7 @@ class GraspExecutorNode(Node):
             self.get_logger().warn(f"[GRIPPER] {label}: goal rejected by controller")
             return False
         res_fut = goal_handle.get_result_async()
-        if not self._wait_for_future(res_fut, self._move_timeout):
+        if not wait_for_future(res_fut, self._move_timeout):
             self.get_logger().warn(f"[GRIPPER] {label}: result timed out")
             return False
         return True
@@ -1257,7 +1256,7 @@ class GraspExecutorNode(Node):
         point.time_from_start.nanosec = int((self._home_move_duration - sec) * 1e9)
         goal.trajectory.points = [point]
         send_fut = self._arm_traj_client.send_goal_async(goal)
-        if not self._wait_for_future(send_fut, self._move_timeout):
+        if not wait_for_future(send_fut, self._move_timeout):
             self.get_logger().warn("[HOME] send-goal timed out")
             return False
         goal_handle = send_fut.result()
@@ -1265,7 +1264,7 @@ class GraspExecutorNode(Node):
             self.get_logger().warn("[HOME] goal rejected by controller")
             return False
         res_fut = goal_handle.get_result_async()
-        if not self._wait_for_future(res_fut, self._move_timeout):
+        if not wait_for_future(res_fut, self._move_timeout):
             self.get_logger().warn("[HOME] result timed out")
             return False
         return True
@@ -1274,7 +1273,7 @@ class GraspExecutorNode(Node):
         req = GetPlanningScene.Request()
         req.components.components = PlanningSceneComponents.WORLD_OBJECT_GEOMETRY
         fut = self._get_scene_client.call_async(req)
-        if not self._wait_for_future(fut):
+        if not wait_for_future(fut):
             self.get_logger().warn(f"[CO] GetPlanningScene timed out while fetching '{co_id}'")
             return None
         for co in fut.result().scene.world.collision_objects:
@@ -1297,12 +1296,23 @@ class GraspExecutorNode(Node):
         co.operation = CollisionObject.ADD
         co.header.stamp = self.get_clock().now().to_msg()
         self._co_pub.publish(co)
-        time.sleep(0.15)  # let move_group process ADD before planning
+        time.sleep(MOVE_GROUP_SETTLE_S)  # let move_group process ADD before planning
 
-    def _abort_grasp(self, target_co_id: str) -> bool:
+    def _abort_grasp(self) -> bool:
+        """Restore default arm speed and signal grasp failure (always returns False)."""
         self._arm.max_velocity = self._arm_default_velocity
         self._arm.max_acceleration = self._arm_default_acceleration
         return False
+
+    def _detach_remove_co(self, target_co_id: str) -> None:
+        """Detach + remove a collision object from the gripper/scene (non-fatal on error)."""
+        if not self._use_collision_scene:
+            return
+        try:
+            self._arm.detach_collision_object(id=target_co_id)
+            self._arm.remove_collision_object(id=target_co_id)
+        except Exception as e:
+            self.get_logger().warn(f"[CO] Detach/remove failed (non-fatal): {e}")
 
     def _execute_single_grasp(
         self, g, skip_place: bool = False, place_xy: tuple | None = None
@@ -1314,7 +1324,7 @@ class GraspExecutorNode(Node):
         pos = np.array([g.pose.position.x, g.pose.position.y, g.pose.position.z])
         q = g.pose.orientation
         quat_xyzw = [q.x, q.y, q.z, q.w]
-        approach = Rotation.from_quat(quat_xyzw).as_matrix()[:, 2]  # z-col = approach axis
+        approach = _approach_axis(quat_xyzw)
 
         contact_pos = pos + self._grasp_forward_offset * approach
         pre_pos = (pos - self._approach_offset * approach).tolist()
@@ -1345,7 +1355,7 @@ class GraspExecutorNode(Node):
             f" [CAPPED at max_finger_pos={self._max_finger_pos*1000:.0f}mm/side]"
             if per_finger_pos == self._max_finger_pos else ""
         )
-        if abs(actual_opening - icgnet_opening) > 0.002:
+        if abs(actual_opening - icgnet_opening) > WIDTH_MISMATCH_TOL_M:
             self.get_logger().warn(
                 f"[GRIPPER] ICGNet width={icgnet_opening*1000:.1f}mm → "
                 f"pre-grasp opening={actual_opening*1000:.1f}mm (per finger={per_finger_pos*1000:.1f}mm){width_note}"
@@ -1357,7 +1367,7 @@ class GraspExecutorNode(Node):
             )
         self._gripper_move_to(per_finger_pos, 'pre-grasp')
 
-        # ── Step 0: update collision scene ───────────────────────────────────
+        # Step 0: update collision scene
         if self._use_collision_scene:
             self._arm.update_planning_scene()
 
@@ -1371,7 +1381,7 @@ class GraspExecutorNode(Node):
             Rotation.from_quat(quat_xyzw) * Rotation.from_euler('z', 180.0, degrees=True)
         ).as_quat().tolist()
 
-        # ── Step 1/5: pre-grasp (joint-space, default velocity) ───────────────
+        # Step 1/5: pre-grasp (joint-space, default velocity)
         self.get_logger().info(
             f"[STEP 1/5] PRE-GRASP → [{pre_pos[0]:.3f}, {pre_pos[1]:.3f}, {pre_pos[2]:.3f}]"
         )
@@ -1395,7 +1405,7 @@ class GraspExecutorNode(Node):
             self.get_logger().warn(
                 "[STEP 1/5] PRE-GRASP FAILED (both orientations) — aborting this candidate"
             )
-            return self._abort_grasp(target_co_id)
+            return self._abort_grasp()
         time.sleep(self._pregrasp_settle_time)
 
         self._arm.max_velocity = self._approach_velocity
@@ -1412,7 +1422,7 @@ class GraspExecutorNode(Node):
             self._remove_co_from_scene(target_co_id)
             self.get_logger().info(f"[CO] Removed '{target_co_id}' from scene for approach")
 
-        # ── Step 2/5: Cartesian approach → contact surface ───────────────────────
+        # Step 2/5: Cartesian approach → contact surface
         # contact_pos = pos + grasp_forward_offset * approach
         # where pos is ICGNet TCP (0.045 m behind contact along approach),
         # so contact_pos = exactly the predicted contact point on the object surface.
@@ -1435,10 +1445,10 @@ class GraspExecutorNode(Node):
                 f"[STEP 2/5] APPROACH FAILED in {dt:.2f}s — aborting this candidate"
             )
             # CO stays absent: _reset_scene() will re-add it after moving home.
-            return self._abort_grasp(target_co_id)
+            return self._abort_grasp()
         self.get_logger().info(f"[STEP 2/5] Contact surface reached in {dt:.2f}s")
 
-        # ── Step 3/5: close gripper + verify grasp ────────────────────────────
+        # Step 3/5: close gripper + verify grasp
         self.get_logger().info("[STEP 3/5] CLOSING GRIPPER")
         self._gripper_close()
         # Demand a fresh joint_state: wall-clock sleep is meaningless at low RTF (e.g. 0.03).
@@ -1454,7 +1464,7 @@ class GraspExecutorNode(Node):
                 f"{self._min_finger_gap*1000:.0f}mm) — missed object"
             )
             # CO stays absent: _reset_scene() will re-add it after moving home.
-            return self._abort_grasp(target_co_id)
+            return self._abort_grasp()
         if finger_gap > self._max_finger_gap:
             self._last_failure_reason = REASON_OBJECT_TIPPED
             self.get_logger().warn(
@@ -1462,13 +1472,13 @@ class GraspExecutorNode(Node):
                 f"{self._max_finger_gap*1000:.0f}mm) — object tipped or controller aborted"
             )
             # CO stays absent: _reset_scene() will re-add it after moving home.
-            return self._abort_grasp(target_co_id)
+            return self._abort_grasp()
         self.get_logger().info(
             f"[STEP 3/5] Object confirmed between fingers "
             f"(gap={finger_gap*1000:.1f}mm, range [{self._min_finger_gap*1000:.0f}–{self._max_finger_gap*1000:.0f}mm])"
         )
 
-        # ── Step 3b: re-add CO then attach to gripper for collision-aware lift ──
+        # Step 3b: re-add CO then attach to gripper for collision-aware lift
         if self._use_collision_scene:
             self._readd_co_to_scene(_target_co)
             try:
@@ -1482,7 +1492,7 @@ class GraspExecutorNode(Node):
             except Exception as e:
                 self.get_logger().warn(f"[STEP 3b] Attach failed (non-fatal): {e}")
 
-        # ── Step 4/5: Cartesian lift (straight +Z from grasp position) ────────
+        # Step 4/5: Cartesian lift (straight +Z from grasp position)
         # Cartesian path prevents the STATUS_ABORTED that occurs when joint-space
         # planning cannot find an IK solution from the extended grasp configuration.
         self._arm.max_velocity = self._lift_velocity
@@ -1505,13 +1515,8 @@ class GraspExecutorNode(Node):
         if not ok:
             self._last_failure_reason = REASON_LIFT_PLAN_FAIL
             self.get_logger().warn(f"[STEP 4/5] LIFT FAILED in {dt:.2f}s")
-            if self._use_collision_scene:
-                try:
-                    self._arm.detach_collision_object(id=target_co_id)
-                    self._arm.remove_collision_object(id=target_co_id)
-                except Exception as e:
-                    self.get_logger().warn(f"[STEP 4 fail] Detach failed: {e}")
-            return self._abort_grasp(target_co_id)
+            self._detach_remove_co(target_co_id)
+            return self._abort_grasp()
         self.get_logger().info(f"[STEP 4/5] Object lifted in {dt:.2f}s")
 
         # Verify object is still gripped after lift (drop detection).
@@ -1524,13 +1529,8 @@ class GraspExecutorNode(Node):
                 f"[STEP 4/5 POST-CHECK] Object dropped during lift "
                 f"(gap={finger_gap_post*1000:.1f}mm < {self._min_finger_gap*1000:.0f}mm)"
             )
-            if self._use_collision_scene:
-                try:
-                    self._arm.detach_collision_object(id=target_co_id)
-                    self._arm.remove_collision_object(id=target_co_id)
-                except Exception as e:
-                    self.get_logger().warn(f"[STEP 4 drop] Detach failed: {e}")
-            return self._abort_grasp(target_co_id)
+            self._detach_remove_co(target_co_id)
+            return self._abort_grasp()
 
         # Slip detection: a held object should rise with the TCP by ~lift_height. If it rose
         # far less, the friction grasp gave way and the object slipped through the fingers
@@ -1547,19 +1547,14 @@ class GraspExecutorNode(Node):
                     f"expected ~{self._lift_height*100:.0f}cm "
                     f"(< {self._slip_follow_ratio*100:.0f}% = {min_rise*100:.1f}cm) — grip gave way"
                 )
-                if self._use_collision_scene:
-                    try:
-                        self._arm.detach_collision_object(id=target_co_id)
-                        self._arm.remove_collision_object(id=target_co_id)
-                    except Exception as e:
-                        self.get_logger().warn(f"[STEP 4 slip] Detach failed: {e}")
-                return self._abort_grasp(target_co_id)
+                self._detach_remove_co(target_co_id)
+                return self._abort_grasp()
             self.get_logger().info(
                 f"[STEP 4/5 POST-CHECK] Object followed lift: rose {actual_rise*100:.1f}cm "
                 f"(expected ~{self._lift_height*100:.0f}cm) — grip holding"
             )
 
-        # ── Steps 5–7 + HOME: transport → lower → release → retract → HOME ─────
+        # Steps 5–7 + HOME: transport → lower → release → retract → HOME
         return self._place_object(quat_xyzw, target_co_id, skip_place, place_xy=place_xy)
 
 
@@ -1658,7 +1653,7 @@ class GraspExecutorNode(Node):
         place_y = place_xy[1] if place_xy is not None else self._place_y
 
         if skip_place:
-            # Debug path: old behaviour — go HOME while holding the object.
+            # Debug path: lift and go HOME holding the object (no place into bin).
             self._arm.max_velocity = self._arm_default_velocity
             self._arm.max_acceleration = self._arm_default_acceleration
             self.get_logger().info("[STEP 5/5] SKIP_PLACE → HOME (debug, object held)")
@@ -1670,12 +1665,7 @@ class GraspExecutorNode(Node):
             self.get_logger().info(
                 f"[STEP 5/5] Home {'reached' if ok else 'FAILED'} in {time.time()-t0:.2f}s"
             )
-            if self._use_collision_scene:
-                try:
-                    self._arm.detach_collision_object(id=target_co_id)
-                    self._arm.remove_collision_object(id=target_co_id)
-                except Exception as e:
-                    self.get_logger().warn(f"[SKIP_PLACE] Detach failed (non-fatal): {e}")
+            self._detach_remove_co(target_co_id)
             self._active_co_id = None
             self._active_co = None
             self._last_failure_reason = REASON_SUCCESS
@@ -1705,15 +1695,7 @@ class GraspExecutorNode(Node):
             np.column_stack([_x_proj, _y_axis, _z_down])
         ).as_quat().tolist()
 
-        def _co_detach_remove():
-            if self._use_collision_scene:
-                try:
-                    self._arm.detach_collision_object(id=target_co_id)
-                    self._arm.remove_collision_object(id=target_co_id)
-                except Exception as e:
-                    self.get_logger().warn(f"[PLACE] Detach/remove failed: {e}")
-
-        # ── Step 5/7: joint-space transfer → above bin ───────────────────────────
+        # Step 5/7: joint-space transfer → above bin
         # OMPL plans the long lateral arc freely. Orientation (quat_place, top-down) is an
         # IK GOAL on the TARGET, not a path constraint, so pick_ik finds a valid seed without
         # hitting joint limits. Goal wrist is top-down → OMPL finds a smooth path.
@@ -1729,8 +1711,8 @@ class GraspExecutorNode(Node):
             self.get_logger().warn(
                 f"[STEP 5/7] TRANSFER FAILED in {time.time()-t0:.2f}s — aborting"
             )
-            _co_detach_remove()
-            return self._abort_grasp(target_co_id)
+            self._detach_remove_co(target_co_id)
+            return self._abort_grasp()
         self.get_logger().info(f"[STEP 5/7] Transfer done in {time.time()-t0:.2f}s")
 
         gap = self._read_finger_gap_fresh(self._joint_state_fresh_timeout)
@@ -1740,10 +1722,10 @@ class GraspExecutorNode(Node):
                 f"[STEP 5/7] Object dropped during transfer "
                 f"(gap={gap*1000:.1f}mm < {self._min_finger_gap*1000:.0f}mm) — aborting"
             )
-            _co_detach_remove()
-            return self._abort_grasp(target_co_id)
+            self._detach_remove_co(target_co_id)
+            return self._abort_grasp()
 
-        # ── Step 6/7: Cartesian lower → place_release ────────────────────────────
+        # Step 6/7: Cartesian lower → place_release
         # Wrist is now top-down (quat_place), so the straight descent achieves
         # fraction≈1.0 and the object is released just above the bin floor. Threshold
         # kept at 0.3 as a safety net; joint-space alternative causes 30s+ spinning.
@@ -1763,8 +1745,8 @@ class GraspExecutorNode(Node):
             self.get_logger().warn(
                 f"[STEP 6/7] LOWER FAILED in {time.time()-t0:.2f}s — aborting"
             )
-            _co_detach_remove()
-            return self._abort_grasp(target_co_id)
+            self._detach_remove_co(target_co_id)
+            return self._abort_grasp()
         self.get_logger().info(f"[STEP 6/7] Release position reached in {time.time()-t0:.2f}s")
 
         gap = self._read_finger_gap_fresh(self._joint_state_fresh_timeout)
@@ -1774,10 +1756,10 @@ class GraspExecutorNode(Node):
                 f"[STEP 6/7] Object dropped during lower "
                 f"(gap={gap*1000:.1f}mm < {self._min_finger_gap*1000:.0f}mm) — aborting"
             )
-            _co_detach_remove()
-            return self._abort_grasp(target_co_id)
+            self._detach_remove_co(target_co_id)
+            return self._abort_grasp()
 
-        # ── Step 7/7: open gripper → release object ────────────────────────────
+        # Step 7/7: open gripper → release object
         # We always want the gripper FULLY open on release. The hand controller reports
         # SUCCEEDED on the open goal even when the fingers barely move (goal_tolerance=0.04 >
         # full stroke), so verify the ABSOLUTE opening: the jaw must reach (near) full open
@@ -1812,17 +1794,17 @@ class GraspExecutorNode(Node):
                 f"({gap_after_open*1000:.1f}mm < {release_min*1000:.1f}mm) after "
                 f"{self._max_release_retries} retries — object stayed jammed"
             )
-            _co_detach_remove()
-            return self._abort_grasp(target_co_id)
+            self._detach_remove_co(target_co_id)
+            return self._abort_grasp()
 
-        _co_detach_remove()
+        self._detach_remove_co(target_co_id)
         if self._use_collision_scene:
             self.get_logger().info(f"[STEP 7/7] Detached '{target_co_id}'")
 
         self._active_co_id = None
         self._active_co = None
 
-        # ── Retract: Cartesian +Z before going HOME ────────────────────────────
+        # Retract: Cartesian +Z before going HOME
         self.get_logger().info(f"[RETRACT] Cartesian retract → z={retract_pos[2]:.3f}")
         self._arm.move_to_pose(
             position=retract_pos, quat_xyzw=quat_place,
@@ -1834,7 +1816,7 @@ class GraspExecutorNode(Node):
         if not ok:
             self.get_logger().warn("[RETRACT] Retract failed (non-fatal) — proceeding to HOME")
 
-        # ── HOME: joint-space (gripper empty → wrist reorientation safe) ──────
+        # HOME: joint-space (gripper empty → wrist reorientation safe)
         self._arm.max_velocity = self._arm_default_velocity
         self._arm.max_acceleration = self._arm_default_acceleration
         self.get_logger().info("[HOME] Returning to home (object released)")

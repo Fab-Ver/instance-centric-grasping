@@ -23,11 +23,14 @@ from .icgnet_inference import ICGNetPredictor
 from .pointcloud_utils import (
     PointCloudConfig, gripper_keypoints_world, pointcloud2_to_numpy, process_point_cloud_dual,
 )
+from .ros_utils import read_workspace_bounds
 
 
 SCORE_HUE_GREEN = 0.33
 MIN_POINTS_FOR_INFERENCE = 50
 CLASS_NAMES = {0: 'mug', 1: 'box', 2: 'can', 3: 'bottle', 4: 'cylindric', 5: 'ball', 6: 'other'}
+OTHER_CLASS_ID = 6
+GRIPPER_WIDTH_CLIP_M = (0.02, 0.08)
 
 
 def _score_to_color(score: float) -> ColorRGBA:
@@ -66,7 +69,7 @@ def _build_grasp_markers(centers, rot_matrices, scores, widths, frame_id, now):
 
     for c, R, s, w in zip(centers, rot_matrices, scores, widths):
         color = _score_to_color(float(s))
-        w_clipped = float(np.clip(w, 0.02, 0.08))
+        w_clipped = float(np.clip(w, *GRIPPER_WIDTH_CLIP_M))
         segments = gripper_keypoints_world(c, R, w_clipped)
         for start, end in segments:
             m.points.append(Point(x=float(start[0]), y=float(start[1]), z=float(start[2])))
@@ -107,7 +110,7 @@ class ICGNetGraspNode(Node):
     def __init__(self):
         super().__init__('icgnet_grasp_node')
 
-        # ── Parameters ───────────────────────────────────────────────────────
+        # Parameters
         self.declare_parameter('config_path', '')
         self.declare_parameter('icgnet_repo_path', '')
         self.declare_parameter('camera_topic', '/camera/rgbd_camera/points')
@@ -148,14 +151,7 @@ class ICGNetGraspNode(Node):
         self.voxel_size = self.get_parameter('voxel_size').get_parameter_value().double_value
         self.n_grasps = self.get_parameter('n_grasps').get_parameter_value().integer_value
         self.grasp_score_threshold = self.get_parameter('grasp_score_threshold').get_parameter_value().double_value
-        self.workspace_bounds = {
-            'x': (self.get_parameter('workspace_x_min').get_parameter_value().double_value,
-                  self.get_parameter('workspace_x_max').get_parameter_value().double_value),
-            'y': (self.get_parameter('workspace_y_min').get_parameter_value().double_value,
-                  self.get_parameter('workspace_y_max').get_parameter_value().double_value),
-            'z': (self.get_parameter('workspace_z_min').get_parameter_value().double_value,
-                  self.get_parameter('workspace_z_max').get_parameter_value().double_value),
-        }
+        self.workspace_bounds = read_workspace_bounds(self)
         self._pc_config = PointCloudConfig(
             voxel_size=self.voxel_size,
             nb_neighbors=self.get_parameter('pc_nb_neighbors').get_parameter_value().integer_value,
@@ -169,7 +165,7 @@ class ICGNetGraspNode(Node):
         self._bin_footprint = self.get_parameter('exclude_bin_footprint').get_parameter_value().double_value
         self._bin_z_max = self.get_parameter('exclude_bin_z_max').get_parameter_value().double_value
 
-        # ── Model loading (non-fatal: node stays alive without model for debug) ─
+        # Model loading (non-fatal: node stays alive without model for debug)
         self.predictor = None
         if not config_path or not repo_path:
             self.get_logger().error(
@@ -183,11 +179,11 @@ class ICGNetGraspNode(Node):
             except Exception as e:
                 self.get_logger().error(f"Failed to load ICGNet: {e}")
 
-        # ── TF ───────────────────────────────────────────────────────────────
+        # TF
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
-        # ── Pointcloud subscriber (BEST_EFFORT — required for Gazebo sensor QoS) ─
+        # Pointcloud subscriber (BEST_EFFORT — required for Gazebo sensor QoS)
         qos_sensor = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
@@ -197,7 +193,7 @@ class ICGNetGraspNode(Node):
         self.latest_pc_msg = None
         self.create_subscription(PointCloud2, camera_topic, self._pc_callback, qos_sensor)
 
-        # ── Publisher ────────────────────────────────────────────────────────
+        # Publisher
         self.grasp_pub = self.create_publisher(PoseArray, '/icgnet/grasps', 10)
         self.marker_pub = self.create_publisher(MarkerArray, '/icgnet/grasps_markers', 10)
         self.preprocessed_cloud_pub = self.create_publisher(
@@ -216,7 +212,7 @@ class ICGNetGraspNode(Node):
             MarkerArray, '/icgnet/reconstruction_meshes', recon_qos
         )
 
-        # ── Collision object publisher (MoveIt2 planning scene) ──────────────
+        # Collision object publisher (MoveIt2 planning scene)
         self._publish_co = self.get_parameter('publish_collision_objects').get_parameter_value().bool_value
         co_topic = self.get_parameter('collision_object_topic').get_parameter_value().string_value
         self._collision_pub = self.create_publisher(
@@ -231,7 +227,7 @@ class ICGNetGraspNode(Node):
         )
         self._published_collision_ids: set = set()
 
-        # ── Service ──────────────────────────────────────────────────────────
+        # Service
         self.create_service(Trigger, '/icgnet/compute_grasps', self._compute_grasps_cb)
 
         self.get_logger().info(
@@ -264,18 +260,20 @@ class ICGNetGraspNode(Node):
         co.operation = CollisionObject.ADD
         return co
 
+    def _in_bin_mask(self, pts: np.ndarray) -> np.ndarray:
+        """Boolean mask of points (N, 3) inside the drop-bin AABB (world frame)."""
+        half = self._bin_footprint / 2.0
+        return (
+            (pts[:, 0] >= self._bin_x - half) & (pts[:, 0] <= self._bin_x + half) &
+            (pts[:, 1] >= self._bin_y - half) & (pts[:, 1] <= self._bin_y + half) &
+            (pts[:, 2] <= self._bin_z_max)
+        )
+
     def _clip_mesh_exclude_bin(self, mesh):
         """Remove faces whose vertices fall inside the drop-bin AABB. Returns None if mesh is empty."""
         import trimesh
-        half = self._bin_footprint / 2.0
         v = mesh.vertices
-        in_bin = (
-            (v[:, 0] >= self._bin_x - half) &
-            (v[:, 0] <= self._bin_x + half) &
-            (v[:, 1] >= self._bin_y - half) &
-            (v[:, 1] <= self._bin_y + half) &
-            (v[:, 2] <= self._bin_z_max)
-        )
+        in_bin = self._in_bin_mask(v)
         bad = set(np.where(in_bin)[0])
         if not bad:
             return mesh
@@ -467,14 +465,7 @@ class ICGNetGraspNode(Node):
         camera_pos_world = translation
 
         if self._exclude_bin:
-            half = self._bin_footprint / 2.0
-            in_bin = (
-                (points_world[:, 0] >= self._bin_x - half) &
-                (points_world[:, 0] <= self._bin_x + half) &
-                (points_world[:, 1] >= self._bin_y - half) &
-                (points_world[:, 1] <= self._bin_y + half) &
-                (points_world[:, 2] <= self._bin_z_max)
-            )
+            in_bin = self._in_bin_mask(points_world)
             n_removed = int(in_bin.sum())
             if n_removed > 0:
                 points_world = points_world[~in_bin]
@@ -533,12 +524,12 @@ class ICGNetGraspNode(Node):
                     "semantic class labels will be incorrect for multi-object scenes."
                 )
             sem_class_raw = np.array(
-                [int(cls_arr[iid]) if iid < len(cls_arr) else 6 for iid in inst_ids],
+                [int(cls_arr[iid]) if iid < len(cls_arr) else OTHER_CLASS_ID for iid in inst_ids],
                 dtype=np.int32,
             )
         except Exception as e:
-            self.get_logger().warn(f"Could not extract semantic_class: {e} — defaulting to 6 (other)")
-            sem_class_raw = np.full(len(inst_ids), 6, dtype=np.int32)
+            self.get_logger().warn(f"Could not extract semantic_class: {e} — defaulting to {OTHER_CLASS_ID} (other)")
+            sem_class_raw = np.full(len(inst_ids), OTHER_CLASS_ID, dtype=np.int32)
 
         n_total = len(centers)
 
@@ -546,7 +537,7 @@ class ICGNetGraspNode(Node):
         if output.reconstructions:
             for item in output.reconstructions:
                 mesh, inst_id = item if isinstance(item, tuple) else (item, 0)
-                cls_id = int(cls_arr[inst_id]) if inst_id < len(cls_arr) else 6
+                cls_id = int(cls_arr[inst_id]) if inst_id < len(cls_arr) else OTHER_CLASS_ID
                 self.get_logger().info(
                     f"[RECON] inst_{inst_id} → class={CLASS_NAMES.get(cls_id, '?')} (id={cls_id})"
                 )
@@ -589,24 +580,17 @@ class ICGNetGraspNode(Node):
                 f">0.7: {int((scores > 0.7).sum())}"
             )
 
-        rot_filtered     = rot_matrices
-        centers_filtered = centers
-        scores_filtered  = scores
-        widths_filtered  = widths
-        inst_filtered    = inst_ids
-        cls_filtered     = sem_class_raw
-
         now = self.get_clock().now().to_msg()
 
         pose_array = PoseArray()
         pose_array.header.frame_id = self.target_frame
         pose_array.header.stamp = now
-        for i in range(len(centers_filtered)):
+        for i in range(len(centers)):
             p = Pose()
-            p.position.x = float(centers_filtered[i, 0])
-            p.position.y = float(centers_filtered[i, 1])
-            p.position.z = float(centers_filtered[i, 2])
-            quat = Rotation.from_matrix(rot_filtered[i]).as_quat()
+            p.position.x = float(centers[i, 0])
+            p.position.y = float(centers[i, 1])
+            p.position.z = float(centers[i, 2])
+            quat = Rotation.from_matrix(rot_matrices[i]).as_quat()
             p.orientation.x = float(quat[0])
             p.orientation.y = float(quat[1])
             p.orientation.z = float(quat[2])
@@ -615,7 +599,7 @@ class ICGNetGraspNode(Node):
         self.grasp_pub.publish(pose_array)
 
         marker_array = _build_grasp_markers(
-            centers_filtered, rot_filtered, scores_filtered, widths_filtered,
+            centers, rot_matrices, scores, widths,
             self.target_frame, now,
         )
         self.marker_pub.publish(marker_array)
@@ -623,13 +607,13 @@ class ICGNetGraspNode(Node):
         ga = GraspArray()
         ga.header.frame_id = self.target_frame
         ga.header.stamp = now
-        for i in range(len(centers_filtered)):
+        for i in range(len(centers)):
             g = Grasp()
             g.pose = pose_array.poses[i]
-            g.score = float(scores_filtered[i])
-            g.width = float(widths_filtered[i])
-            g.instance_id = int(inst_filtered[i])
-            g.semantic_class = int(cls_filtered[i])
+            g.score = float(scores[i])
+            g.width = float(widths[i])
+            g.instance_id = int(inst_ids[i])
+            g.semantic_class = int(sem_class_raw[i])
             ga.grasps.append(g)
         self.rich_pub.publish(ga)
 

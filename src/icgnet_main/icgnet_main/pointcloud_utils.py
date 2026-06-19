@@ -85,45 +85,6 @@ def crop_to_workspace(points_np: np.ndarray, bounds: dict) -> np.ndarray:
     return points_np[mask]
 
 
-def process_point_cloud(
-    points_np: np.ndarray,
-    config: PointCloudConfig,
-    camera_position: np.ndarray,
-    workspace_bounds: dict | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Preprocess the point cloud for ICGNet:
-    crop → voxel downsample → statistical outlier removal → normals toward camera.
-    """
-    if points_np.shape[0] == 0:
-        return np.array([]).reshape(0, 3), np.array([]).reshape(0, 3)
-
-    if workspace_bounds is not None:
-        points_np = crop_to_workspace(points_np, workspace_bounds)
-        if points_np.shape[0] == 0:
-            return np.array([]).reshape(0, 3), np.array([]).reshape(0, 3)
-
-    import open3d as o3d
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(points_np)
-    pcd = pcd.voxel_down_sample(voxel_size=config.voxel_size)
-    pcd, _ = pcd.remove_statistical_outlier(
-        nb_neighbors=config.nb_neighbors,
-        std_ratio=config.std_ratio,
-    )
-    pcd.estimate_normals(
-        search_param=o3d.geometry.KDTreeSearchParamHybrid(
-            radius=config.voxel_size * config.normal_radius_factor,
-            max_nn=config.normal_max_nn,
-        )
-    )
-    pcd.orient_normals_towards_camera_location(
-        np.array(camera_position, dtype=np.float64)
-    )
-
-    return np.asarray(pcd.points), np.asarray(pcd.normals)
-
-
 def _estimate_and_orient_normals(pcd, config: PointCloudConfig, camera_position: np.ndarray):
     import open3d as o3d
     pcd.estimate_normals(

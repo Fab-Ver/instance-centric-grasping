@@ -1,12 +1,11 @@
 icgnet_grasp_node:
   ros__parameters:
-    # ── EDIT ONCE ─────────────────────────────────────────────────────────────
+    # EDIT ONCE — install-specific paths.
     # Absolute path to the ICGNet checkpoint config.yaml (~ expansion supported).
     config_path: "~/Robotics_Project/instance-centric-grasping/icgnet_weights/config.yaml"
 
     # Root of the cloned icg_net repository.
     icgnet_repo_path: "~/icg_net"
-    # ──────────────────────────────────────────────────────────────────────────
 
     # PointCloud2 topic from the Gazebo RGB-D camera
     camera_topic: "/camera/rgbd_camera/points"
@@ -36,11 +35,7 @@ icgnet_grasp_node:
     workspace_z_min: 0.01
     workspace_z_max: 0.60
 
-    # TABLE DISABLED — objects rest on the ground; table z-filter not active
-    # table_z_top: 0.05
-    # table_z_margin: 0.005
-
-    # ── Collision objects (MoveIt2 planning scene) ────────────────────────────
+    # Collision objects (MoveIt2 planning scene)
     # Publish per-instance collision meshes reconstructed by ICGNet after each
     # /icgnet/compute_grasps call. MoveIt2 uses them for collision-aware planning.
     publish_collision_objects: true
@@ -60,7 +55,7 @@ icgnet_grasp_node:
     # Prefix for collision object IDs. Executor uses this to attach/detach by ID.
     collision_id_prefix: "icgnet_inst_"
 
-    # ── Pointcloud preprocessing ──────────────────────────────────────────────
+    # Pointcloud preprocessing
     # Statistical outlier removal: number of neighbours to examine per point.
     pc_nb_neighbors: 20
 
@@ -73,7 +68,7 @@ icgnet_grasp_node:
     # Normal estimation maximum neighbours within the search radius.
     pc_normal_max_nn: 30
 
-    # ── Drop-bin exclusion (world frame) ──────────────────────────────────────
+    # Drop-bin exclusion (world frame)
     # Remove points inside the drop bin AABB before ICGNet inference so the bin
     # walls/floor do not appear as graspable instances. Must match place_x /
     # place_y / bin_footprint / bin_rim_height in grasp_executor_params.yaml.

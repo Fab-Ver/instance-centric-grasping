@@ -8,6 +8,8 @@ import subprocess
 
 import yaml
 
+from icgnet_msgs.msg import SceneObject
+
 
 def half_height_from_sdf(sdf_path: str) -> float:
     """Return half the vertical extent of the first collision geometry in the SDF, or 0.05."""
@@ -23,7 +25,7 @@ def half_height_from_sdf(sdf_path: str) -> float:
         m = re.search(r'<radius>([\d.eE+-]+)</radius>', content)
         if m:
             return float(m.group(1))
-    except Exception:
+    except (OSError, ValueError):
         pass
     return 0.05
 
@@ -198,3 +200,25 @@ def spawn_gz_entity(
         if logger:
             logger.error(f'[{entity_name}] Spawn exception: {e}')
         return False
+
+
+def yaw_to_quat_zw(yaw: float) -> tuple[float, float]:
+    """Return the (z, w) quaternion components for a rotation of `yaw` about +Z."""
+    half = yaw / 2.0
+    return math.sin(half), math.cos(half)
+
+
+def scene_object_from_entry(entry: dict) -> SceneObject:
+    """Build a SceneObject from a spawn-registry dict.
+
+    Expected keys: entity_name, model_name, semantic_class, x, y, z, yaw.
+    """
+    obj = SceneObject()
+    obj.entity_name = entry['entity_name']
+    obj.model_name = entry['model_name']
+    obj.semantic_class = entry['semantic_class']
+    obj.pose.position.x = float(entry['x'])
+    obj.pose.position.y = float(entry['y'])
+    obj.pose.position.z = float(entry['z'])
+    obj.pose.orientation.z, obj.pose.orientation.w = yaw_to_quat_zw(float(entry['yaw']))
+    return obj

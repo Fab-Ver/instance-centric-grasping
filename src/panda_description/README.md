@@ -24,4 +24,4 @@ and adds the camera bridge and TF. Do not run it directly.
 LIBGL_ALWAYS_SOFTWARE=1 ros2 launch icgnet_main world.launch.py
 ```
 
-See `TESTING_GUIDE.md` at the workspace root for the full terminal sequence.
+See the root `README.md` for the full terminal sequence.

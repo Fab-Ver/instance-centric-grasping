@@ -24,7 +24,7 @@ grasp_executor_node:
     object_init_y: 0.0
     object_init_z: 0.05
 
-    # ── Collision scene integration ───────────────────────────────────────────
+    # Collision scene integration
     # Master switch. Set false to disable all collision-scene logic (debug only).
     use_collision_scene: true
 
@@ -37,7 +37,7 @@ grasp_executor_node:
     # Must match grasp_service_node collision_id_prefix.
     collision_id_prefix: 'icgnet_inst_'
 
-    # ── Gripper control ───────────────────────────────────────────────────────
+    # Gripper control
     # Extra per-finger opening added to g.width/2 for the pre-grasp position (m).
     finger_safety_margin: 0.01
 
@@ -48,22 +48,22 @@ grasp_executor_node:
     min_finger_gap: 0.005
 
     # If the finger gap is above this value the gripper barely closed → object tipped/missed (m).
-    # Raised to 0.040 (Panda hardware limit) to allow grasping balls up to r=39mm (78mm dia).
+    # Set to the Panda hardware limit (0.040m): allows grasping balls up to r=39mm (78mm dia).
     # Catches gripper-controller-abort false positives: a valid grasp still closes ≥1mm past surface.
     max_finger_gap: 0.040
 
     # Thread pool size for MultiThreadedExecutor.
     executor_threads: 4
 
-    # ── Grasp filtering ───────────────────────────────────────────────────────
+    # Grasp filtering
     # Grasps wider than this are discarded (beyond Panda finger range) (m).
     max_grasp_width: 0.08
 
-    # ── Arm velocity defaults ────────────────────────────────────────────────
+    # Arm velocity defaults
     # Velocity/acceleration fraction used for home moves and after failure recovery.
     arm_default_velocity: 0.5
     arm_default_acceleration: 0.3
-    # ── MoveIt2 planning parameters ──────────────────────────────────────────
+    # MoveIt2 planning parameters
     # Allowed planning time (s) per motion goal. 5s is sufficient for RRTConnect
     # in a scene with ICGNet collision objects; 0.5s (pymoveit2 default) is too tight.
     allowed_planning_time: 5.0
@@ -71,7 +71,7 @@ grasp_executor_node:
     # Number of planning attempts before declaring failure.
     num_planning_attempts: 10
 
-    # ── ICGNet inference timeout ──────────────────────────────────────────────
+    # ICGNet inference timeout
     # Max seconds to wait for /icgnet/compute_grasps to return.
     # ICGNet with return_meshes=True (marching cubes) on a small GPU takes 20–60 s.
     inference_timeout: 120.0
@@ -83,7 +83,7 @@ grasp_executor_node:
     # Normal moves take ~10 s at low RTF; 60 s leaves ample headroom.
     move_timeout: 60.0
 
-    # ── Pick-and-place (Fase 5) ──────────────────────────────────────────────
+    # Pick-and-place
     # Drop bin centre in world frame (must match drop_bin pose in icgnet_world.sdf).
     # y=-0.50: outside camera FOV (camera covers y ∈ [-0.35,0.35]) → no cloud pollution.
     place_x: 0.45
@@ -102,7 +102,7 @@ grasp_executor_node:
     bin_z_tolerance: 0.20  # z-margin above rim for in-bin check — tolerates piled/tilted objects (any pose counts)
 
     # z reached by joint-space transfer move (clears bin rim=0.10 + tallest object ~0.22m).
-    # 0.35m gives 13cm clearance over a wine bottle; was 0.45 (over-conservative, no table present).
+    # 0.35m gives 13cm clearance over a wine bottle.
     transport_clear_z: 0.35
 
     # Velocity for transfer (Step 5, longest joint-space move) and lower (Step 6, Cartesian descent).
@@ -127,7 +127,7 @@ grasp_executor_node:
     # 20 states ≈ 0.4s sim at 50Hz; at RTF 0.03 = ~13s wall (acceptable for pick-and-place).
     release_settle_states: 20
 
-    # ── Multi-object sweep (Fase 4) ───────────────────────────────────────────
+    # Multi-object sweep
     # Lateral Y spacing between per-instance bin slots during a multi-object sweep (m).
     # With bin_footprint=0.30m, up to 2 objects fit within ±0.12m of centre at this spacing.
     # Increase to 0.14 only if objects reliably fall within a smaller footprint.

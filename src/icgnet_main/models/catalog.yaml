@@ -22,8 +22,6 @@ can:
   class_id: 2
   models:
     - coke_can     # [mesh] real DAE from Gazebo DB — Coca-Cola can with texture
-  #  - beer_can     # [prim] cylinder r=33mm h=105mm
-  #  - soup_can     # [prim] cylinder r=38mm h=100mm
 bottle:
   class_id: 3
   models:
@@ -35,10 +33,8 @@ cylindric:
   class_id: 4
   models:
     - pringles_can  # [prim] cylinder r=38mm h=220mm
-   # - tape_roll     # [prim] cylinder r=40mm h=40mm
 ball:
   class_id: 5
   models:
     - tennis_ball   # [prim] sphere r=38mm (~230cm3), gap=38mm < max_finger_gap=40mm
-   # - baseball      # [prim] sphere r=39mm (~248cm3), gap=39mm < max_finger_gap=40mm
 
