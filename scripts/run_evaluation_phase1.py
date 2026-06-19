@@ -6,9 +6,9 @@ so evaluation runs on ONE object at a time, no distractors. Each run spawns a si
 object of the target class, triggers a grasp, and logs the outcome plus the per-attempt
 failure reason reported by grasp_executor.
 
-Output (in report/, versioned — never overwrites a previous run):
-  report/eval_<R>runs_<classes>_v<N>.csv          — one row per run
-  report/eval_<R>runs_<classes>_v<N>_summary.txt  — aggregated metrics
+Output (in results/tests/, versioned — never overwrites a previous run):
+  results/tests/eval_<R>runs_<classes>_v<N>.csv          — one row per run
+  results/tests/eval_<R>runs_<classes>_v<N>_summary.txt  — aggregated metrics
 where <R>=runs per class, <classes>=dash-joined class list, <N>=0 or last+1.
 
 Each class maps to exactly one model in catalog.yaml, so target_class spawn is

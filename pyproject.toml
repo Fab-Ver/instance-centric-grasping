@@ -1,7 +1,7 @@
 [project]
 name = "instance-centric-grasping"
 version = "0.1.0"
-description = "ICGNet-based robotic grasping simulation with ROS2 Humble and Gazebo Classic"
+description = "ICGNet-based robotic grasping simulation with ROS2 Humble and Gazebo Sim Fortress"
 requires-python = ">=3.12"
 dependencies = [
     # --- PyTorch (CUDA build, see [tool.uv.sources]) ---

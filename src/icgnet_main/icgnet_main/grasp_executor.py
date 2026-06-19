@@ -10,9 +10,7 @@ from tf2_msgs.msg import TFMessage
 from shape_msgs.msg import SolidPrimitive
 from ros_gz_interfaces.msg import Entity
 from ros_gz_interfaces.srv import SetEntityPose
-from moveit_msgs.msg import (
-    CollisionObject, PlanningScene, PlanningSceneComponents,
-)
+from moveit_msgs.msg import CollisionObject, PlanningSceneComponents
 from moveit_msgs.srv import GetPlanningScene
 from control_msgs.action import FollowJointTrajectory
 from rclpy.action import ActionClient
@@ -355,7 +353,6 @@ class GraspExecutorNode(Node):
 
     def _model_poses_cb(self, msg: TFMessage):
         _tracked_pt = None
-        _tracked_header = None
         with self._object_pose_lock:
             for transform in msg.transforms:
                 t = transform.transform.translation
@@ -364,7 +361,6 @@ class GraspExecutorNode(Node):
                 if transform.child_frame_id == self._object_entity_name:
                     self._object_pose = pt
                     _tracked_pt = pt
-                    _tracked_header = transform.header
         if _tracked_pt is not None:
             ps = PoseStamped()
             ps.header.frame_id = 'world'

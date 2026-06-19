@@ -14,7 +14,6 @@ from threading import Lock, Thread
 
 import rclpy
 from ament_index_python.packages import get_package_share_directory
-from geometry_msgs.msg import Pose
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
