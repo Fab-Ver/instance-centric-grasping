@@ -39,76 +39,75 @@ Politecnico di Torino
 %%%%%%%%% ABSTRACT
 \begin{abstract}
 We integrate ICGNet~\cite{zurbrugger2024icgnet}, a unified network for instance-centric grasping,
-into a complete ROS2 manipulation pipeline running in Gazebo Sim Fortress (DART physics) with a
-Franka Emika Panda arm and MoveIt2. From a single point cloud, ICGNet jointly predicts, for every
-object instance: a semantic class, a reconstructed 3D mesh, and a set of scored 6-DoF grasps. We
-exploit this unified output for \emph{target-driven bin filling}: an operator names a semantic class
-and the robot must grasp every matching instance into a bin while ignoring distractors, with no
-additional recognition module. Across 180 single-object trials over six classes, the system reaches
-an overall grasp success rate (GSR) of 36.1\,\%, ranging from 90\,\% on cans to 0\,\% on mugs;
-the spread closely tracks how well each class matches ICGNet's training distribution.
-Multi-object scenes remain an open problem: our preliminary analysis indicates that ICGNet's instance
-segmentation does not transfer reliably from its simulated training distribution to the noisier, differently distributed point clouds of our
-setup, which undermines the per-instance labelling that targeted picking depends on.
+into a complete ROS2 manipulation pipeline. The system runs in Gazebo Sim Fortress with a Franka Emika Panda arm and MoveIt2. From a single point cloud, ICGNet predicts, for every
+object instance, a semantic class, a reconstructed 3D mesh, and a set of scored 6-DoF grasps. We use
+this output for \emph{target-driven bin filling}: an operator names a class, and the robot grasps
+every matching instance into a bin while ignoring the other objects, without any extra recognition
+module. Across 180 single-object trials over six classes, the system reaches an overall grasp success
+rate (GSR) of 36.1\,\%, from 90\,\% on cans down to 0\,\% on mugs. This spread closely follows how
+well each class matches ICGNet's training distribution. Multi-object scenes remain an open problem:
+our analysis shows that ICGNet's instance segmentation does not transfer reliably from its simulated
+training data to the noisier point clouds of our setup, and this breaks the per-instance labelling
+that targeted picking relies on.
 \end{abstract}
 
 %-------------------------------------------------------------------------
 \section{Introduction}
 \label{sec:intro}
 
-Grasping a \emph{specified} object in a cluttered scene requires three capabilities at once:
-localising each instance, recognising what it is, and computing a kinematically valid 6-DoF grasp.
-Conventional systems chain a detector, a classifier, and a grasp planner; every interface between
-them accumulates error, and target-driven behaviour (``pick the bottle'') usually needs an external
-segmentation or recognition stage bolted on top of a grasp predictor.
+Grasping a \emph{specified} object in a cluttered scene needs three capabilities at the same time:
+locating each instance, recognising what it is, and computing a kinematically valid 6-DoF grasp.
+Conventional systems solve this with a separate detector, classifier, and grasp planner connected in
+a chain. This design has two drawbacks: every interface between the stages adds error, and
+target-driven behaviour (``pick the bottle'') usually needs an extra segmentation or recognition
+stage on top of the grasp predictor.
 
-ICGNet~\cite{zurbrugger2024icgnet} removes these seams by reasoning at the object level inside a
-single network. Given one point cloud, it segments the scene into instances and, for each, jointly
-predicts a semantic label, a 3D shape reconstruction, and a set of quality-ranked grasps. Because the
-label is produced \emph{per instance}, the network natively exposes the interface that target-driven
-grasping needs, a direction the authors explicitly highlight as an application of their method.
+ICGNet~\cite{zurbrugger2024icgnet} avoids this chain by working at the object level inside a single
+network. Given one point cloud, it segments the scene into instances and, for each one, predicts a
+semantic label, a 3D shape reconstruction, and a set of quality-ranked grasps. Since the label is
+produced \emph{per instance}, the network already provides what target-driven grasping needs. The
+authors themselves point to this as one application of their method.
 
-We build a manipulation pipeline around this joint output for target-driven pick-and-place: the
-operator issues one semantic command (\eg\ \texttt{can}) and the robot grasps every instance of that
-class into a bin, ignoring the rest. No extra recognition stage is added, the class label comes
-straight from ICGNet and the reconstructed mesh becomes the collision geometry MoveIt2 plans against.
-Our contribution is an integration and a study: we report what works (single-object picking), motivate
-the choices behind it, and analyse where it breaks down (multi-object scenes) and why.
+We build a manipulation pipeline around this output for target-driven pick-and-place: the operator
+issues one command (\eg\ \texttt{can}) and the robot grasps every instance of that class into a bin,
+ignoring the rest. We add no extra recognition stage. The class label comes directly from ICGNet, and
+its reconstructed mesh becomes the collision geometry that MoveIt2 plans against. Our contribution is
+an integration and a study: we report what works (single-object picking), explain the choices behind
+it, and analyse where and why it breaks down (multi-object scenes).
 
 %-------------------------------------------------------------------------
 \section{ICGNet in Brief}
 \label{sec:icgnet}
 
 \noindent\textbf{What it does.}
-ICGNet takes a point cloud from a single, arbitrary viewpoint and produces an \emph{instance-centric}
-representation of the tabletop: each partially observed object becomes a latent embedding from which
-the network decodes its semantic class, its complete 3D shape, and its grasp affordances. This
-contrasts with scene-centric detectors, which predict grasps for the whole cloud with no notion of
-which grasp belongs to which object.
+ICGNet takes a point cloud captured from a single, arbitrary viewpoint and produces an
+\emph{instance-centric} representation of the tabletop. Each partially observed object becomes a
+latent embedding, and from this embedding the network decodes the object's semantic class, its
+complete 3D shape, and its grasp affordances.
 
 \noindent\textbf{How it works.}
-The backbone aggregates \emph{surface} and \emph{volumetric} features at multiple scales into a sparse
-feature volume, which a transformer decoder distils into a small set of latent object embeddings
-through iterative masked cross- and self-attention (Mask3D-style instance query refinement). From these
-embeddings, per-instance heads decode three quantities (Figure~\ref{fig:overview}): (i)~an occupancy
-field, meshed by marching cubes; (ii)~contact-based 6-DoF grasp affordances, each given by a contact
-point and approach angle with a quality score and gripper width; and (iii)~a semantic class with a
-point-wise instance assignment, both emerging directly from the refinement.
+The backbone extracts \emph{surface} and \emph{volumetric} features at multiple scales and combines
+them into a sparse feature volume. A transformer decoder then turns this volume into a small set of
+latent object embeddings, using iterative masked cross- and self-attention. From these embeddings,
+per-instance heads decode three outputs (Figure~\ref{fig:overview}): (i)~an occupancy field, meshed by
+marching cubes; (ii)~contact-based 6-DoF grasp affordances, each defined by a contact point and
+approach angle with a quality score and gripper width; and (iii)~a semantic class together with a
+point-wise instance assignment.
 
 \noindent\textbf{Why we use it.}
-Crucially, segmentation, classification, reconstruction, and grasp prediction share the same instance
-embeddings and come out of one forward
-pass.\footnote{Reference implementation: \url{https://github.com/renezurbruegg/icg_net}.} This gives us
-exactly what target-driven grasping needs, a per-instance class label to select the object and a
-per-instance mesh to avoid collisions as it is removed, so we use ICGNet as a frozen, inference-only
-front-end and build the manipulation logic around it.
+The key point is that segmentation, classification, reconstruction, and grasp prediction share the
+same instance embeddings and come out of a single forward
+pass.\footnote{Reference implementation: \url{https://github.com/renezurbruegg/icg_net}.} This is
+exactly what target-driven grasping needs: a per-instance class label to select the object, and a
+per-instance mesh to avoid collisions while the object is removed. We therefore use ICGNet as a
+frozen, inference-only front-end and build the manipulation logic around it.
 
 \begin{figure*}[t]
 \centering
 \includegraphics[width=0.74\linewidth]{images/mainfig_no_obj_grasps.pdf}
 \caption{\textbf{ICGNet architecture~\cite{zurbrugger2024icgnet}.} Sparse surface and dense volumetric
-  features are extracted at multiple scales from the input point cloud. Masked-attention instance
-  query refinement decomposes the scene into individually labelled instances. Per-instance decoders
+  features are extracted at multiple scales from the input point cloud. Masked-attention refinement of
+  the instance queries decomposes the scene into individually labelled instances. Per-instance decoders
   then predict 3D occupancy and 6-DoF grasp affordances with quality scores and gripper widths.}
 \label{fig:overview}
 \end{figure*}
@@ -119,36 +118,41 @@ front-end and build the manipulation logic around it.
 
 Our goal is a closed pipeline from semantic command to action: given a target class, the robot must
 grasp \emph{only} the instances of that class and drop them into a bin. We wrap ICGNet's frozen
-inference output in a ROS2 system handling perception, selection, planning, and execution; this section
-describes how ICGNet is embedded, and Section~\ref{sec:pipeline} how its outputs drive the arm.
+inference output in a ROS2 system that handles perception, selection, planning, and execution. This
+section describes how ICGNet is embedded; Section~\ref{sec:pipeline} then describes how its outputs
+drive the arm.
 
-\subsection{ICGNet integration (inference only)}
+\subsection{ICGNet Integration}
 \label{sec:integration}
 
-The pretrained ICGNet weights are loaded once and kept frozen; we never train or fine-tune. A thin
-wrapper runs the network on the GPU and prepares the two clouds it expects: a \emph{dense} cloud for
-the segmentation backbone and a sparser, voxel-downsampled (3\,mm) cloud to sample grasp contacts.
-Beforehand the cloud is transformed into the world frame, cropped to the workspace, and stripped of
-the drop-bin region so the bin walls are never taken for an object. Each predicted instance is then
-assigned a single label by arg-max over the class logits, yielding one of seven categories
-(\texttt{mug}, \texttt{box}, \texttt{can}, \texttt{bottle}, \texttt{cylindric}, \texttt{ball},
-\texttt{other}).
+The pretrained ICGNet weights are loaded once and kept frozen; we never train or fine-tune them. A
+wrapper runs the network on the GPU. It first transforms the input cloud into the world frame, crops
+it to the workspace, and removes the drop-bin region, so the bin walls are never mistaken for an
+object. From this cleaned cloud it prepares the two inputs the network expects: a \emph{dense} cloud
+for the segmentation backbone, and a sparser, voxel-downsampled cloud for sampling grasp contacts.
+Each predicted instance is then given a single label by arg-max over the class logits, producing one
+of seven categories (\texttt{mug}, \texttt{box}, \texttt{can}, \texttt{bottle}, \texttt{cylindric},
+\texttt{ball}, \texttt{other}).
 
 The robot runs in Gazebo Sim Fortress with the DART physics engine. The Panda is integrated through
-\texttt{gz\_ros2\_control}: the arm follows a \texttt{JointTrajectoryController} on a \emph{position}
-interface, letting DART resolve the dynamics internally, while the gripper uses an \emph{effort}
-interface with a PD controller that sustains the closing force on contact, so objects are held by
-friction alone. Input comes from an RGB-D camera
-(640$\times$480, 60$^{\circ}$ HFOV), and planning uses MoveIt2 with the \texttt{pick\_ik} solver and
-OMPL RRTConnect.
+\texttt{gz\_ros2\_control}. The arm follows a \texttt{JointTrajectoryController} on a \emph{position}
+interface, which lets DART resolve the dynamics internally. The gripper instead uses an \emph{effort}
+interface with a PD controller that keeps the closing force on contact, so objects are held by
+friction alone. Input comes from an RGB-D camera, and planning uses MoveIt2 with the \texttt{pick\_ik}
+solver and OMPL RRTConnect.
 
-\subsection{Differences from the original paper}
+\subsection{Differences from the Original Paper}
 \label{sec:diff}
 
-Table~\ref{tab:diff} contrasts our setup with the original. We run in Gazebo Sim (DART physics) rather than the PyBullet environment; we use a slightly larger voxelization; and our objects come
-from the Gazebo model database plus geometric primitives rather than the VGN object set. 
+Table~\ref{tab:diff} compares our setup with the original. We run in Gazebo Sim (DART physics)
+instead of PyBullet, we use a slightly larger voxel size, and our objects come from the Gazebo model
+database plus geometric primitives instead of the VGN object set. 
 
-On the execution side our setup actually mirrors the paper's \emph{real-world} configuration, a Franka Panda driven through MoveIt2, whereas the paper's \emph{simulation} evaluation grasps with a free-floating gripper. We also keep every predicted grasp (score threshold $0.0$) and re-rank candidates inside the executor, instead of pre-filtering at a fixed confidence as the paper does on the real robot.
+On the execution side, our setup actually matches the paper's \emph{real-world} configuration (a
+Franka Panda driven through MoveIt2), while the paper's \emph{simulation} evaluation grasps with a
+free-floating gripper. We also keep every predicted grasp (score threshold $0.0$) and re-rank the
+candidates inside the executor, instead of pre-filtering at a fixed confidence as the paper does on
+the real robot.
 
 \begin{table}[t]
 \centering
@@ -172,7 +176,7 @@ Arm execution       & Free-floating gripper$^\dagger$ & Panda + MoveIt2 \\
 {\scriptsize $^\dagger$In simulation only; the paper's real-robot setup uses a Franka arm with MoveIt!.}
 \end{table}
 
-\subsection{ROS2 computational graph}
+\subsection{ROS2 Computational Graph}
 \label{sec:rosgraph}
 
 The system centres on two custom nodes (Figure~\ref{fig:rosgraph}):
@@ -196,8 +200,9 @@ reset) and \texttt{scene\_visualizer} (live RViz mirror).
 \centering
 \includegraphics[width=0.76\linewidth]{images/ros2_graph.pdf}
 \caption{\textbf{ROS2 computational graph} of the core inference-and-execution loop. Ellipses are
-  nodes (blue = our custom nodes, green = MoveIt2); yellow = topics; orange dashed = services; the
-  green diamond is the operator entry point.}
+  nodes (orange: our custom nodes; green: MoveIt2; blue: ROS2 infrastructure and controllers), yellow
+  rectangles are topics, and orange dashed rectangles are services. Grey boxes are external components
+  (Gazebo, the Panda, RViz2), and the green diamond is the operator entry point.}
 \label{fig:rosgraph}
 \end{figure*}
 
@@ -205,17 +210,16 @@ reset) and \texttt{scene\_visualizer} (live RViz mirror).
 \section{Pick-and-Place Pipeline}
 \label{sec:pipeline}
 
-The executor consumes ICGNet's three outputs in three ways. The per-instance \textbf{reconstructed
+The executor uses ICGNet's three outputs in three ways. The per-instance \textbf{reconstructed
 meshes} become MoveIt2 collision objects (convex-hulled and clipped against the bin region), so the
 planner avoids the objects being manipulated. The per-instance \textbf{semantic class} drives
 selection: candidates whose class does not match the target are discarded. The \textbf{grasp pose,
-score, and width} then govern action, the score orders the attempts and the width pre-positions the
-fingers.
+score, and width} then govern the action: the score orders the attempts, and the width pre-positions
+the fingers.
 
 The executor first sends the arm home and opens the gripper to clear the camera's view, then calls
-\texttt{/icgnet/compute\_grasps}. Candidates are filtered by gripper width ($\leq$80\,mm), workspace
-bounds, semantic class, and a minimum pre-grasp height, then sorted by descending score. For each in
-turn it executes:
+\texttt{/icgnet/compute\_grasps}. Candidates are filtered by gripper width, workspace
+bounds, semantic class, and a minimum pre-grasp height, then sorted by descending score. For each attempt it executes:
 
 \begin{enumerate}[noitemsep, topsep=2pt, leftmargin=*]
   \item \textbf{Pre-grasp}: a joint-space motion to a 0.12\,m standoff along the grasp approach
@@ -223,7 +227,7 @@ turn it executes:
   \item \textbf{Approach}: a Cartesian motion to the contact point
         $\mathbf{p}_c=\mathbf{p}_{\mathrm{tcp}}+0.045\,\hat{\mathbf{n}}$; the target's collision object
         is temporarily removed so it does not block the final approach.
-  \item \textbf{Grasp}: the gripper closes and a finger-gap check (5--40\,mm) confirms an object is
+  \item \textbf{Grasp}: the gripper closes and a finger-gap check confirms an object is
         actually held; DART contact friction sustains the hold, and the collision object is re-added
         and attached to the gripper for collision-aware lifting.
   \item \textbf{Lift}: a Cartesian motion straight up by 0.18\,m, with a slip check that the object
@@ -244,8 +248,8 @@ candidate is tried (Figure~\ref{fig:single} shows a typical single-object scene)
 \begin{minipage}{0.49\columnwidth}\centering
 \includegraphics[width=\linewidth]{images/reconstricted_single.png}
 \end{minipage}
-\caption{\textbf{Single-object scene} in RViz at the start of a run. \emph{Left:} the real scene---the
-  Panda arm at home, one target object (a can), and the drop bin. \emph{Right:} ICGNet's per-instance
+\caption{\textbf{Single-object scene} in RViz at the start of a run. \emph{Left:} the real scene, with
+  the Panda arm at home, one target object (a can), and the drop bin. \emph{Right:} ICGNet's per-instance
   reconstruction (red mesh) and the top-ranked 6-DoF grasp it proposes (gripper marker), published into
   the scene before execution begins.}
 \label{fig:single}
@@ -255,12 +259,12 @@ candidate is tried (Figure~\ref{fig:single} shows a typical single-object scene)
 \section{Validation: Single-Object Picking}
 \label{sec:results}
 
-We evaluated the pipeline on 180 single-object trials, six classes, 30 runs each, one object spawned
-at a random reachable pose per run. To separate ICGNet's classifier from its grasp proposals, we ran
-each set in two modes: \emph{target}, restricting selection to the object's ground-truth class (the
-actual task), and \emph{any}, dropping the filter so the executor tries the globally top-scored grasp.
-The comparison isolates failures of \emph{which} object is picked from \emph{how well} it is grasped.
-Table~\ref{tab:gsr} reports both.
+We evaluated the pipeline on 180 single-object trials: six classes, 30 runs each, with one object
+spawned at a random reachable pose per run. To separate ICGNet's classifier from its grasp proposals,
+we ran each set in two modes. In \emph{target} mode we restrict selection to the object's
+ground-truth class, which is the actual task. In \emph{any} mode we drop the filter, so the executor
+simply tries the globally top-scored grasp. This comparison separates failures of \emph{which} object
+is picked from \emph{how well} it is grasped. Table~\ref{tab:gsr} reports both modes.
 
 \begin{table}[t]
 \centering
@@ -273,7 +277,7 @@ Table~\ref{tab:gsr} reports both.
 \toprule
 \textbf{Class}   & \textbf{Target} & \textbf{Any}   & \textbf{Dominant limit} \\
 \midrule
-can              & 90.0\%          & 80.0\%         & --- \\
+can              & 90.0\%          & 80.0\%         & n/a \\
 box              & 66.7\%          & 63.3\%         & pregrasp planning \\
 bottle           & 33.3\%          & 66.7\%         & classification \\
 cylindric        &  6.7\%          & 23.3\%         & classification \\
@@ -286,36 +290,35 @@ ball             & 20.0\%          & 26.7\%         & score collapse \\
 \end{table}
 
 \noindent\textbf{Classification is the first bottleneck.}
-Dropping the class filter \emph{raises} overall GSR from 36.1 to 43.9\,\%, with the gain concentrated
-where ICGNet mislabels the object. In target mode the requested class is absent from the detections in
-17/30 bottle and 25/30 cylindric runs, ending those trials in \textsc{perception\_no\_grasp} before any
-motion; without the filter the same object is grasped under whatever label it received, and GSR jumps
-to 66.7\,\% (bottle) and 23.3\,\% (cylindric). Mugs are the extreme, never labelled \texttt{mug} across
-all 30 runs (read as \texttt{ball} or \texttt{box}) and split into 4.3 instances on average. Cans and
-boxes are labelled correctly almost every time and barely move; their small drop reflects the executor
-occasionally locking onto a worse grasp once the constraint is gone.
+Dropping the class filter \emph{raises} overall GSR from 36.1 to 43.9\,\%, and the gain is
+concentrated where ICGNet mislabels the object. In target mode the requested class is missing from the
+detections in 17/30 bottle runs and 25/30 cylindric runs, which ends those trials in
+\textsc{perception\_no\_grasp} before any motion. Without the filter, the same object is grasped under
+whatever label it received, and GSR jumps to 66.7\,\% (bottle) and 23.3\,\% (cylindric). Mugs are the
+extreme case: they are never labelled \texttt{mug} in any of the 30 runs (they are read as
+\texttt{ball} or \texttt{box}), and they split into 4.3 instances on average. Cans and boxes, in
+contrast, are labelled correctly almost every time.
 
 \noindent\textbf{The remaining limits are model- and execution-side.}
-The any-mode column exposes the limits left once misclassification is removed. \emph{Balls} stay low
-($20.0\,\%$ target, $26.7\,\%$ any) for two reasons: ICGNet collapses \emph{every} ball grasp score to
-${\approx}0$, so the executor cannot rank proposals and falls back on geometry
-alone; and the residual failures split between reachability (\textsc{pregrasp\_plan\_fail} on the
-tilted approaches a low sphere induces against our fixed $0.12$\,m standoff) and execution
-(\textsc{grasp\_miss}), so a top-down or Cartesian standoff and a reactive close would lift them
-further. \emph{Mugs fail in execution} (72\,\% after planning, mostly \textsc{grasp\_miss}): ICGNet
-reconstructs the mug as a ball or box, so the predicted contact and width fit the wrong shape, and our
-\emph{open-loop} close (commanding the predicted width rather than closing to contact) then settles on
-empty space, which a reactive close would mask. Boxes are a milder case: their flat top forces
-near-vertical, IK-stressing approaches, capping them around two-thirds.
+The any-mode column shows the limits that remain once misclassification is removed. \emph{Balls} stay
+low ($20.0\,\%$ target, $26.7\,\%$ any) for two reasons. First, ICGNet collapses \emph{every} ball
+grasp score to ${\approx}0$, so the executor cannot rank the proposals and falls back on geometry
+alone. Second, the remaining failures are split between reachability and execution. \emph{Mugs fail in
+execution} (72\,\% after planning, mostly \textsc{grasp\_miss}): ICGNet reconstructs the mug as a ball
+or box, so the predicted contact and width fit the wrong shape. Our \emph{open-loop} close then
+commands the predicted width instead of closing to contact, and the fingers settle on empty space, an
+error that a reactive close would avoid. Boxes are a milder case: their flat top forces near-vertical
+approaches that stress the IK solver, capping them at around two-thirds.
 
 \noindent\textbf{The grasp score is only weakly predictive.}
-Excluding balls, the score barely separates outcomes (successful attempts average $0.68$ vs $0.60$ for
-failures, both reaching up to $0.97$): it ranks geometric quality in isolation, blind to reachability and
-reconstruction fidelity, so high-scoring bottle proposals still fail downstream. Balls are the degenerate
-case, scored ${\approx}0$ regardless of outcome and thus uninformative. In target mode, successful
-runs are efficient: 69\,\% grasp on the first attempt ($1.52$ attempts on average). Overall, single-object
-performance is gated by three independent factors, classification, reachable approach geometry, and
-reconstruction fidelity, each of which reappears, amplified, once several objects share the scene.
+Excluding balls, the score barely separates outcomes (successful attempts average $0.68$ against
+$0.60$ for failures, and both reach up to $0.97$). It ranks geometric quality on its own, ignoring
+reachability and reconstruction fidelity, so high-scoring bottle proposals still fail later in the
+pipeline. Balls are a degenerate case: they are scored ${\approx}0$ regardless of the outcome, so the
+score carries no information. In target mode, successful runs are efficient, with 69\,\% grasping on
+the first attempt ($1.52$ attempts on average). Overall, single-object performance is limited by three
+independent factors: classification, reachable approach geometry, and reconstruction fidelity. Each of
+them returns, and grows worse, once several objects share the scene.
 
 %-------------------------------------------------------------------------
 \section{Multi-Object Case: An Open Limitation}
@@ -334,7 +337,7 @@ present, in two opposite ways. Under \emph{over-segmentation}, one physical obje
 several instances that often receive \emph{different} semantic classes; the class filter then finds
 either more instances of the requested class than really exist or none at all, so it can no longer
 isolate the targets. Under \emph{merging}, the whole tabletop can instead collapse into a
-\emph{single} instance, the entire reconstruction in Figure~\ref{fig:multi} (right) is one red
+\emph{single} instance: the entire reconstruction in Figure~\ref{fig:multi} (right) is one red
 object. This breaks even the unfiltered \texttt{any} mode, because the grasps are proposed for one
 merged blob that maps to no real pickable object. In effect the single-object misclassification of
 Section~\ref{sec:results} reappears, amplified by clutter; and because we segment only once, a wrong
@@ -357,7 +360,7 @@ initial segmentation is never corrected and propagates through the whole sweep.
 
 This behaviour is not specific to our integration: the ICGNet authors list it as a known limitation,
 noting that the network ``occasionally over-segments or combines instances even when they are not in
-contact''~\cite{zurbrugger2024icgnet}---a weakness inherited from its Mask3D-style query refinement.
+contact''~\cite{zurbrugger2024icgnet}: a weakness inherited from its Mask3D-style query refinement.
 Two factors of our setup amplify it. The first is the input-distribution shift of
 Table~\ref{tab:diff} (single-view Gazebo depth instead of the clean, augmented training depth), the
 same factor behind the single-object misclassification. The second is our design choice of one
@@ -372,17 +375,17 @@ the training augmentation or fine-tuning on in-domain single-view depth) are the
 \label{sec:conclusion}
 
 We integrated a frozen ICGNet into a complete ROS2 pipeline (Gazebo/DART, a Franka Panda, MoveIt2)
-and used its per-instance class, mesh, and grasps for target-driven bin filling, with no extra
+and used its per-instance class, mesh, and grasps for target-driven bin filling, without any extra
 recognition module. The pipeline works for single objects that match ICGNet's training distribution
 (90\,\% on cans) and reaches 36.1\,\% overall in target mode, or 43.9\,\% without the class filter.
-The unified per-instance output is well suited to target-driven grasping, but end-to-end performance
-is gated by ICGNet's instance segmentation under our input-distribution shift: misclassification in
-the single-object case, and over- or under-segmentation in clutter; the latter an acknowledged
-ICGNet limitation amplified by our single-view depth and single-inference design. The most promising
-directions are therefore to reduce the domain gap (matching the training augmentation or fine-tuning
-on in-domain single-view depth) and to add segmentation post-processing and closed-loop
-re-perception, together with the executor-side fixes of Section~\ref{sec:results} (a top-down or
-Cartesian pre-grasp, and a reactive close).
+The unified per-instance output is well suited to target-driven grasping, but the end-to-end
+performance is limited by ICGNet's instance segmentation under our input-distribution shift. This
+appears as misclassification in the single-object case, and as over- or under-segmentation in clutter.
+The second problem is a known ICGNet limitation, amplified here by our single-view depth and our
+single-inference design. The most promising directions are therefore to reduce the domain gap (by
+matching the training augmentation or fine-tuning on in-domain single-view depth) and to add
+segmentation post-processing and closed-loop re-perception, together with the executor-side fixes
+from Section~\ref{sec:results} (a top-down or Cartesian pre-grasp, and a reactive close).
 
 %-------------------------------------------------------------------------
 \section*{Declarations}
