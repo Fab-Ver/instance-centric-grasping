@@ -362,7 +362,7 @@ This behaviour is not specific to our integration: the ICGNet authors list it as
 noting that the network ``occasionally over-segments or combines instances even when they are not in
 contact''~\cite{zurbrugger2024icgnet}: a weakness inherited from its Mask3D-style query refinement.
 Two factors of our setup amplify it. The first is the input-distribution shift of
-Table~\ref{tab:diff} (single-view Gazebo depth instead of the clean, augmented training depth), the
+Table~\ref{tab:diff}, the
 same factor behind the single-object misclassification. The second is our design choice of one
 inference per scene with no post-processing of the predicted masks. The authors suggest correcting
 these errors by post-processing the predictions at the cost of higher latency, and, longer term, by
@@ -384,8 +384,7 @@ appears as misclassification in the single-object case, and as over- or under-se
 The second problem is a known ICGNet limitation, amplified here by our single-view depth and our
 single-inference design. The most promising directions are therefore to reduce the domain gap (by
 matching the training augmentation or fine-tuning on in-domain single-view depth) and to add
-segmentation post-processing and closed-loop re-perception, together with the executor-side fixes
-from Section~\ref{sec:results} (a top-down or Cartesian pre-grasp, and a reactive close).
+segmentation post-processing and closed-loop re-perception.
 
 %-------------------------------------------------------------------------
 \section*{Declarations}
@@ -395,8 +394,7 @@ from Section~\ref{sec:results} (a top-down or Cartesian pre-grasp, and a reactiv
   \item \textbf{J.\ Rialti \& A.\ Giunti}: simulation environment and perception:
         Gazebo Sim Fortress / DART, \texttt{gz\_ros2\_control} (position-controlled arm,
         effort-controlled gripper), and the RGB-D camera and TF tree; ICGNet inference integration:
-        the frozen-model wrapper, point-cloud preprocessing (world-frame transform, workspace crop,
-        bin removal, voxel downsampling), and per-instance collision-object publishing.
+        the frozen-model wrapper, point-cloud preprocessing, and per-instance collision-object publishing.
   \item \textbf{F.\ Veroli \& I.\ Necerini}:grasp execution and evaluation: the grasp-executor
         state machine, MoveIt2 planning, the pick-and-place sequence, and bin placement; the test
         harness, the single- and multi-object trials (target and any modes), and the failure and
