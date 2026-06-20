@@ -70,7 +70,7 @@ grasping needs, a direction the authors explicitly highlight as an application o
 
 We build a manipulation pipeline around this joint output for target-driven pick-and-place: the
 operator issues one semantic command (\eg\ \texttt{can}) and the robot grasps every instance of that
-class into a bin, ignoring the rest. No extra recognition stage is added---the class label comes
+class into a bin, ignoring the rest. No extra recognition stage is added, the class label comes
 straight from ICGNet and the reconstructed mesh becomes the collision geometry MoveIt2 plans against.
 Our contribution is an integration and a study: we report what works (single-object picking), motivate
 the choices behind it, and analyse where it breaks down (multi-object scenes) and why.
@@ -389,21 +389,20 @@ Cartesian pre-grasp, and a reactive close).
 
 \noindent\textbf{Author Contributions.}
 \begin{itemize}[noitemsep, topsep=2pt, leftmargin=*]
-  \item \textbf{J.\ Rialti} --- simulation environment: Gazebo Sim Fortress / DART,
-        \texttt{gz\_ros2\_control} (position-controlled arm, effort-controlled gripper), and the
-        RGB-D camera and TF tree.
-  \item \textbf{A.\ Giunti} --- ICGNet inference integration: the frozen-model wrapper, point-cloud
-        preprocessing (world-frame transform, workspace crop, bin removal, voxel downsampling), and
-        per-instance collision-object publishing.
-  \item \textbf{F.\ Veroli} --- grasp execution: the grasp-executor state machine, MoveIt2 planning,
-        the pick-and-place sequence, and bin placement.
-  \item \textbf{I.\ Necerini} --- evaluation: the test harness, the single- and multi-object trials
-        (target and any modes), and the failure and diagnostic analysis.
+  \item \textbf{J.\ Rialti \& A.\ Giunti}: simulation environment and perception:
+        Gazebo Sim Fortress / DART, \texttt{gz\_ros2\_control} (position-controlled arm,
+        effort-controlled gripper), and the RGB-D camera and TF tree; ICGNet inference integration:
+        the frozen-model wrapper, point-cloud preprocessing (world-frame transform, workspace crop,
+        bin removal, voxel downsampling), and per-instance collision-object publishing.
+  \item \textbf{F.\ Veroli \& I.\ Necerini}:grasp execution and evaluation: the grasp-executor
+        state machine, MoveIt2 planning, the pick-and-place sequence, and bin placement; the test
+        harness, the single- and multi-object trials (target and any modes), and the failure and
+        diagnostic analysis.
 \end{itemize}
 
 \smallskip
 \noindent\textbf{Use of Large Language Models.}
-LLMs assisted with debugging and environment setup.
+LLMs assisted with debugging and environment setup, and with image generation for the report and the accompanying video.
 
 %-------------------------------------------------------------------------
 {\small
